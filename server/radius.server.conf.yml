@@ -64,8 +64,8 @@ script:
     timeout: 90s # binds отдаёт сотни тысяч строк - таймаут на весь запрос, включая чтение тела
     #Опционально: точечные обновления/удаления одной записи binds по id через redis pub/sub,
     #в дополнение к полному refresh_interval-reload по HTTP выше. Если addr не задан - не используется.
-    #В канал публикуется JSON вида {"db":"clients","action":"upsert","line":"id;ip;mac;device_mac;port"}
-    #или {"db":"clients","action":"delete","id":"..."}
+    #В канал публикуется JSON вида {"db_type":"clients","action":"add"|"update","object":{"id":123,"ip":<IPINT>,"mac":"...","device_mac":"...","port":44}}
+    #или {"db_type":"clients","action":"delete","object":{"id":123}} - device_mac/port опциональны
     redis:
       addr: ${CLIENTDB_REDIS_ADDR}
       channel: clientdb-bind-events

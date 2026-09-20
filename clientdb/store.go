@@ -125,36 +125,42 @@ func removeBind(list []*Bind, id string) []*Bind {
 	return list
 }
 
-// upsertLocked добавляет новую запись или заменяет существующую с тем же ID.
-// Вызывающий отвечает за блокировку (см. upsert) либо за то, что индекс ещё не
-// опубликован (первичная загрузка в loadBindDB).
-func (idx *bindIndex) upsertLocked(b *Bind) {
+// upsertLocked добавляет новую запись или заменяет существующую с тем же ID,
+// возвращает true, если запись с таким ID уже была. Вызывающий отвечает за
+// блокировку (см. upsert) либо за то, что индекс ещё не опубликован (первичная
+// загрузка в loadBindDB).
+func (idx *bindIndex) upsertLocked(b *Bind) bool {
 	if old, ok := idx.byID[b.ID]; ok {
 		idx.removeLocked(old)
-	} else {
-		idx.count++
+		idx.insertLocked(b)
+		return true
 	}
+	idx.count++
 	idx.insertLocked(b)
+	return false
 }
 
 // upsert - потокобезопасная версия upsertLocked для точечных обновлений уже
-// опубликованного индекса (см. ApplyBindEvent).
-func (idx *bindIndex) upsert(b *Bind) {
+// опубликованного индекса (см. ApplyBindEvent). Возвращает true, если запись с
+// таким ID уже была (т.е. это было обновление, а не создание).
+func (idx *bindIndex) upsert(b *Bind) bool {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	idx.upsertLocked(b)
+	return idx.upsertLocked(b)
 }
 
-// deleteByID удаляет запись по ID, если она есть, потокобезопасно.
-func (idx *bindIndex) deleteByID(id string) {
+// deleteByID удаляет запись по ID, если она есть, потокобезопасно. Возвращает
+// true, если запись была и её удалили.
+func (idx *bindIndex) deleteByID(id string) bool {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	old, ok := idx.byID[id]
 	if !ok {
-		return
+		return false
 	}
 	idx.removeLocked(old)
 	idx.count--
+	return true
 }
 
 // Count - число записей в индексе, потокобезопасно.
@@ -180,6 +186,15 @@ type Store struct {
 	client *http.Client
 	snap   atomic.Value // *snapshot
 	stop   chan struct{}
+
+	// liveMu защищает reloading/pendingLive - буферизацию точечных live-обновлений
+	// (см. ApplyBindEvent) на время reload(). Без этого событие, применённое к
+	// снапшоту прямо перед тем, как reload() подменит его целиком новым, было бы
+	// молча потеряно (если то же изменение ещё не попало в свежий HTTP-дамп) - см.
+	// finishReload.
+	liveMu      sync.Mutex
+	reloading   bool
+	pendingLive []BindEvent
 }
 
 // New синхронно загружает базу при старте (fail-fast), поднимает (если настроено)
@@ -231,8 +246,21 @@ func (s *Store) loop() {
 	}
 }
 
+// reload перезагружает devices и все binds с нуля по HTTP и атомарно подменяет
+// весь snapshot. На время выполнения (от начала запроса к источнику до фактической
+// публикации нового снапшота) точечные live-обновления через ApplyBindEvent не
+// применяются напрямую, а копятся в pendingLive - иначе изменение, применённое к
+// ещё старому снапшоту прямо перед подменой, было бы потеряно. finishReload (через
+// defer, выполняется в любом случае - и при успехе, и при ошибке) снимает флаг и
+// накатывает накопленное на снапшот, актуальный на момент завершения (новый - при
+// успехе, старый - если reload провалился и снапшот не менялся).
 func (s *Store) reload() error {
 	s.lg.NoticeF("clientdb: start loading database")
+
+	s.liveMu.Lock()
+	s.reloading = true
+	s.liveMu.Unlock()
+	defer s.finishReload()
 
 	devices, err := s.loadDevices(s.conf.DevicesURL)
 	if err != nil {
@@ -259,6 +287,25 @@ func (s *Store) reload() error {
 	prom.SetClientDBSize(len(devices), bindCounts)
 	prom.SetClientDBLastReload(time.Now().Unix())
 	return nil
+}
+
+// finishReload снимает флаг reloading и применяет накопленные за время reload()
+// live-события (см. ApplyBindEvent) к снапшоту, актуальному на этот момент - в
+// том порядке, в котором они пришли. Вызывается через defer в reload(), поэтому
+// отрабатывает и при ошибке reload (буфер не должен зависать навсегда, если
+// источник недоступен).
+func (s *Store) finishReload() {
+	s.liveMu.Lock()
+	pending := s.pendingLive
+	s.pendingLive = nil
+	s.reloading = false
+	s.liveMu.Unlock()
+
+	for _, ev := range pending {
+		if err := s.applyBindEventNow(ev); err != nil {
+			s.lg.ErrorF("clientdb: live-update (отложено на время reload): %v", err)
+		}
+	}
 }
 
 func (s *Store) fetchURL(url string) (io.ReadCloser, error) {

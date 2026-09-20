@@ -164,27 +164,27 @@ func TestApplyBindEventUpsertAndDelete(t *testing.T) {
 	}
 	defer s.Close()
 
-	// точечное добавление новой записи в "smart" по ID, без reload
+	// точечное добавление новой записи в "smart" по id, без reload (action=add)
 	if err := s.ApplyBindEvent(BindEvent{
-		DB:     "smart",
-		Action: "upsert",
-		Line:   "99;123456789;AA11BB22CC33",
+		DBType: "smart",
+		Action: "add",
+		Object: BindEventObject{ID: "99", IP: "123456789", Mac: "AA11BB22CC33"},
 	}); err != nil {
-		t.Fatalf("ApplyBindEvent upsert: %v", err)
+		t.Fatalf("ApplyBindEvent add: %v", err)
 	}
 	binds := s.GetBind("smart", "AA11BB22CC33", "", "")
 	if len(binds) != 1 || binds[0].IP.String() == "" {
-		t.Fatalf("new record not visible after upsert: %+v", binds)
+		t.Fatalf("new record not visible after add: %+v", binds)
 	}
 	if b, ok := s.GetBindByID("smart", "99"); !ok || b.ClientMac != "AA11BB22CC33" {
-		t.Fatalf("GetBindByID after upsert: %+v, ok=%v", b, ok)
+		t.Fatalf("GetBindByID after add: %+v, ok=%v", b, ok)
 	}
 
-	// точечное обновление существующей записи "clients" (id=1) - меняем порт
+	// точечное обновление существующей записи "clients" (id=1) - меняем порт (action=update)
 	if err := s.ApplyBindEvent(BindEvent{
-		DB:     "clients",
-		Action: "upsert",
-		Line:   "1;33686018;744D280EE846;085A119465E0;42",
+		DBType: "clients",
+		Action: "update",
+		Object: BindEventObject{ID: "1", IP: "33686018", Mac: "744D280EE846", DeviceMac: "085A119465E0", Port: "42"},
 	}); err != nil {
 		t.Fatalf("ApplyBindEvent update: %v", err)
 	}
@@ -203,8 +203,8 @@ func TestApplyBindEventUpsertAndDelete(t *testing.T) {
 		t.Errorf("byDevicePort not updated: %+v", binds)
 	}
 
-	// точечное удаление по ID
-	if err := s.ApplyBindEvent(BindEvent{DB: "clients", Action: "delete", ID: "2"}); err != nil {
+	// точечное удаление по id
+	if err := s.ApplyBindEvent(BindEvent{DBType: "clients", Action: "delete", Object: BindEventObject{ID: "2"}}); err != nil {
 		t.Fatalf("ApplyBindEvent delete: %v", err)
 	}
 	if binds := s.GetBind("clients", "AABBCCDDEEFF", "085A119465E0", "6"); len(binds) != 0 {
@@ -219,12 +219,12 @@ func TestApplyBindEventUpsertAndDelete(t *testing.T) {
 	}
 
 	// неизвестный источник - ошибка, не паника
-	if err := s.ApplyBindEvent(BindEvent{DB: "unknown-db", Action: "delete", ID: "1"}); err == nil {
+	if err := s.ApplyBindEvent(BindEvent{DBType: "unknown-db", Action: "delete", Object: BindEventObject{ID: "1"}}); err == nil {
 		t.Error("expected error for unknown db")
 	}
 
 	// неизвестный action - ошибка
-	if err := s.ApplyBindEvent(BindEvent{DB: "clients", Action: "bogus", ID: "1"}); err == nil {
+	if err := s.ApplyBindEvent(BindEvent{DBType: "clients", Action: "bogus", Object: BindEventObject{ID: "1"}}); err == nil {
 		t.Error("expected error for unknown action")
 	}
 }
@@ -240,9 +240,9 @@ func TestReloadStillWinsOverLiveUpdates(t *testing.T) {
 	defer s.Close()
 
 	if err := s.ApplyBindEvent(BindEvent{
-		DB:     "smart",
-		Action: "upsert",
-		Line:   "99;123456789;AA11BB22CC33",
+		DBType: "smart",
+		Action: "add",
+		Object: BindEventObject{ID: "99", IP: "123456789", Mac: "AA11BB22CC33"},
 	}); err != nil {
 		t.Fatalf("ApplyBindEvent: %v", err)
 	}
@@ -257,5 +257,72 @@ func TestReloadStillWinsOverLiveUpdates(t *testing.T) {
 	}
 	if _, ok := s.GetBindByID("smart", "99"); ok {
 		t.Error("live-update should not survive a full reload from a source that doesn't have it")
+	}
+}
+
+// TestLiveUpdateDuringReloadIsBufferedAndReplayed - гонка "live-update пришёл, пока
+// идёт reload": событие не должно ни потеряться при подмене снапшота, ни примениться
+// к снапшоту, который вот-вот заменят целиком. Оно должно отложиться и накатиться уже
+// на свежий снапшот сразу после того, как reload его опубликует.
+func TestLiveUpdateDuringReloadIsBufferedAndReplayed(t *testing.T) {
+	var gate chan struct{} // nil - clients отдаётся сразу, не nil - блокируется до close(gate)
+	started := make(chan struct{}, 1)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("type") {
+		case "devices":
+			w.Write([]byte(devicesSample))
+		case "smart":
+			w.Write([]byte(smartSample))
+		case "clients":
+			if gate != nil {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				<-gate
+			}
+			w.Write([]byte(clientsSample))
+		}
+	}))
+	defer srv.Close()
+
+	s, err := New(testConfig(srv.URL), testLogger(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	gate = make(chan struct{})
+	reloadDone := make(chan error, 1)
+	go func() { reloadDone <- s.reload() }()
+
+	<-started // reload сейчас внутри loadBindDB("clients") - s.reloading уже true
+
+	if err := s.ApplyBindEvent(BindEvent{
+		DBType: "clients",
+		Action: "add",
+		Object: BindEventObject{ID: "77", IP: "123456789", Mac: "FF11FF22FF33"},
+	}); err != nil {
+		t.Fatalf("ApplyBindEvent во время reload: %v", err)
+	}
+
+	// событие пришло до подмены снапшота - оно не должно быть видно немедленно
+	if _, ok := s.GetBindByID("clients", "77"); ok {
+		t.Error("live-update should be deferred while reload is in flight, not applied immediately")
+	}
+
+	close(gate) // отпускаем reload
+	if err := <-reloadDone; err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	// после reload отложенное обновление должно примениться поверх свежего снапшота
+	if _, ok := s.GetBindByID("clients", "77"); !ok {
+		t.Error("deferred live-update was not applied after reload completed")
+	}
+	// остальные данные reload'а на месте - буферизация не подменяет сам reload
+	if _, ok := s.GetBindByID("clients", "1"); !ok {
+		t.Error("reload data missing after replaying deferred live-update")
 	}
 }
