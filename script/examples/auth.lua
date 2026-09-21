@@ -166,6 +166,31 @@ local function parseTypeByUnknownDevice(circuit)
     return nil
 end
 
+-- IP-заглушки в binds - не настоящие адреса, а маркеры "весь порт отдан под
+-- общий сервисный пул". 2.2.2.2/4.4.4.4/5.5.5.5 включают соответствующий флаг,
+-- 1.1.1.1/3.3.3.3 зарезервированы под будущие сервисы - сейчас ни на что не
+-- влияют, только исключаются из списка реальных привязок
+local FLAG_BY_IP = { ["2.2.2.2"] = "iptv", ["4.4.4.4"] = "wifi", ["5.5.5.5"] = "youtube" }
+local RESERVED_IPS = { ["1.1.1.1"] = true, ["3.3.3.3"] = true }
+
+-- getPortBinds запрашивает все привязки клиента на порту устройства и разбирает их на:
+--   1. binds - привязки на реальные IP (все 5 IP-заглушек исключены)
+--   2. flags - {iptv=bool, wifi=bool, youtube=bool}: какие общие сервисные
+--      пулы отданы под этот порт целиком
+local function getPortBinds(macSw, port)
+    local all = db:getBind("clients", "", macSw, port)
+    local binds, flags = {}, {}
+    for _, b in ipairs(all) do
+        local flag = FLAG_BY_IP[b.ip]
+        if flag then
+            flags[flag] = true
+        elseif not RESERVED_IPS[b.ip] then
+            binds[#binds + 1] = b
+        end
+    end
+    return binds, flags
+end
+
 function authorize(request)
     local macAbon = request.device_mac
     local macSw = request.option.remote_id or ""
@@ -203,55 +228,46 @@ function authorize(request)
 
     local leaseInet = leaseTime()
 
-    -- один запрос всех привязок на этом порту устройства (мак не задаём)
-    local portBinds = db:getBind("clients", "", macSw, port)
+    local portBinds, flags = getPortBinds(macSw, port)
 
-    -- если привязка ровно одна - она и есть ответ для этого порта, независимо
-    -- от того, чей мак в ней записан. Если их несколько - ищем свою по мак-адресу.
-    -- Оба значения (macAbon и b.client_mac) уже приведены к единому формату
-    -- AA:BB:CC:DD:EE:FF на стороне Go (см. macaddr.Normalize - применяется и к
-    -- request.device_mac при разборе RADIUS-пакета, и к client_mac при загрузке
-    -- clientdb), поэтому их можно сравнивать как обычные строки без нормализации здесь
-    local candidate = nil
+    -- portBinds содержит таблицу всех привязок на порту.
+    -- если на порту только 1 привязка - не смотрим на мак, сразу же устанавливаем IP и возвращаем клиенту
+    -- если привязок >1, то ищем точное совпадение по маку, иначе - ничего не выдаем
+    local ipAddress = nil
     if #portBinds == 1 then
-        candidate = portBinds[1]
+        ipAddress = portBinds[1].ip
     elseif #portBinds > 1 then
         for _, b in ipairs(portBinds) do
             if b.client_mac == macAbon then
-                candidate = b
+                ipAddress = b.ip
                 break
             end
         end
     end
-
-    if candidate then
-        if candidate.ip == "5.5.5.5" then
-            return { pool_name = "YOUTUBE-" .. vlan, lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.Youtube" } }
-        elseif candidate.ip ~= "2.2.2.2" and candidate.ip ~= "4.4.4.4" then
-            return { ip_address = candidate.ip, lease_time_sec = leaseInet }
-        end
+    if ipAddress then
+        return { ip_address = ipAddress, lease_time_sec = leaseInet }
     end
 
-    -- порт целиком отдан под общий пул IPTV/WIFI - срабатывает и когда своя
-    -- привязка не найдена среди нескольких на порту
-    for _, b in ipairs(portBinds) do
-        if b.ip == "4.4.4.4" then
-            return { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.Wifi" } }
-        end
+    -- шаг 2: свою привязку не выдали - порт целиком под общим сервисным пулом?
+    -- порядок приоритета фиксирован: youtube, потом wifi, потом iptv
+    if flags.youtube then
+        return { pool_name = "YOUTUBE-" .. vlan, lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.Youtube" } }
     end
-    for _, b in ipairs(portBinds) do
-        if b.ip == "2.2.2.2" then
-            return { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.IPTV" } }
-        end
+    if flags.wifi then
+        return { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.Wifi" } }
+    end
+    if flags.iptv then
+        return { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.IPTV" } }
     end
 
-    -- smart-устройство (абонентский wifi-роутер и т.п.) - привязка по мак абонента
+    -- шаг 3: smart-устройство (абонентский wifi-роутер и т.п.) по мак абонента,
+    -- затем незарегистрированный wifi-мак (66:99:...), и в самом конце - совсем
+    -- неизвестное устройство
     local smart = db:getBind("smart", macAbon)
     if #smart > 0 then
         return { ip_address = smart[1].ip, lease_time_sec = leaseInet }
     end
 
-    -- ничего не найдено - выдаём "серый" пул
     if macAbon:match("^66:99:") then
         return { pool_name = "INET-" .. vlan .. "-WIFI", lease_time_sec = TIMEOUT_WIFI }
     end

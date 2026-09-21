@@ -15,7 +15,11 @@ import (
 // привязки разных абонентов на одном порту (несколько подключенных за одним свитч-портом);
 // порт 8 отдан под Wifi (4.4.4.4) - имитирует checkAbonWifi; порт 10 - "youtube" (5.5.5.5);
 // порт 11 - своя привязка на реальный IP СОСУЩЕСТВУЕТ на порту с IPTV-заглушкой
-// (2.2.2.2 под чужим маком) - должна выигрывать своя привязка, а не общий IPTV-пул
+// (2.2.2.2 под чужим маком) - должна выигрывать своя привязка, а не общий IPTV-пул;
+// порт 12 - единственная привязка на зарезервированный IP (1.1.1.1) под чужим маком -
+// не должна ни выдаваться как реальный IP, ни включать какой-либо флаг (fallback);
+// порт 13 - две личные привязки + youtube-заглушка (5.5.5.5), мак запроса не совпадает
+// ни с одной личной привязкой - должны получить YOUTUBE, а не INET-*-FAKE
 const clientsBindsData = "1;16909060;744D280EE846;085A119465E0;3\n" +
 	"2;33686018;AABBCCDDEEFF;085A119465E0;6\n" +
 	"3;16909061;AAAAAAAAAAAA;085A119465E0;7\n" +
@@ -23,7 +27,11 @@ const clientsBindsData = "1;16909060;744D280EE846;085A119465E0;3\n" +
 	"6;67372036;CCCCCCCCCCCD;085A119465E0;8\n" +
 	"7;84215045;CCCCCCCCCCCE;085A119465E0;10\n" +
 	"9;2996209395;0096DF35AC12;085A119465E0;11\n" +
-	"10;33686018;AAAAAAAAAAAA;085A119465E0;11\n"
+	"10;33686018;AAAAAAAAAAAA;085A119465E0;11\n" +
+	"11;16843009;DDDDDDDDDDDD;085A119465E0;12\n" +
+	"12;16909076;EEEEEEEEEEEE;085A119465E0;13\n" +
+	"13;16909077;FFFFFFFFFFFF;085A119465E0;13\n" +
+	"14;84215045;111111111111;085A119465E0;13\n"
 
 func testDBServer(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -264,6 +272,60 @@ func TestEngineWithDBOwnBindBeatsSharedIPTVOnSamePort(t *testing.T) {
 	}
 	if resp.PoolName != "" {
 		t.Errorf("expected no pool_name (direct ip), got %+v", resp)
+	}
+}
+
+func TestEngineWithDBReservedIPIsNotABindOrFlag(t *testing.T) {
+	e := testEngineWithDB(t)
+
+	// порт 12 - единственная привязка на зарезервированный IP (1.1.1.1) под чужим
+	// маком. Не должна выдаваться как реальный ip_address (это не настоящий адрес)
+	// и не должна включать какой-либо сервисный флаг - обычный fallback на "серый" пул
+	resp, err := e.CallAuthorize(&events.AuthRequest{
+		NasIp:     "10.0.0.1",
+		DeviceMac: "12:34:56:78:9A:BC",
+		AgentOption: &events.AuthRequestOption{
+			RemoteId:     "08:5A:11:94:65:E0",
+			RawCircuitId: "00000065000C", // vlan=101, port=12
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallAuthorize: %v", err)
+	}
+	if resp.IpAddress != "" {
+		t.Errorf("expected no direct ip (1.1.1.1 is reserved, not a real bind), got %+v", resp)
+	}
+	if resp.PoolName != "INET-101-FAKE" || resp.LeaseTimeSec != 120 {
+		t.Errorf("expected pool_name=INET-101-FAKE lease=120, got %+v", resp)
+	}
+	if len(resp.ExtraAttributes) != 0 {
+		t.Errorf("expected no extra_attributes (no service flag), got %+v", resp.ExtraAttributes)
+	}
+}
+
+func TestEngineWithDBFlagWinsWhenNoOwnBindMatches(t *testing.T) {
+	e := testEngineWithDB(t)
+
+	// порт 13 - две ЧУЖИЕ личные привязки (шаг 1 не находит совпадение по маку) +
+	// youtube-заглушка (5.5.5.5). Должны получить YOUTUBE-пул (шаг 2), а не обычный
+	// INET-*-FAKE - наличие нескольких "чужих" реальных привязок не должно
+	// перекрывать флаг сервисного пула
+	resp, err := e.CallAuthorize(&events.AuthRequest{
+		NasIp:     "10.0.0.1",
+		DeviceMac: "12:34:56:78:9A:BC",
+		AgentOption: &events.AuthRequestOption{
+			RemoteId:     "08:5A:11:94:65:E0",
+			RawCircuitId: "00000065000D", // vlan=101, port=13
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallAuthorize: %v", err)
+	}
+	if resp.PoolName != "YOUTUBE-101" {
+		t.Errorf("expected pool_name=YOUTUBE-101, got %+v", resp)
+	}
+	if resp.ExtraAttributes["Mikrotik-Address-List"] != "Triolan.Youtube" {
+		t.Errorf("expected mikrotik Address-List=Triolan.Youtube, got %+v", resp.ExtraAttributes)
 	}
 }
 
