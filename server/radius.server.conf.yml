@@ -1,12 +1,13 @@
 
 #Logger configuration
-# @TODO на данный момент реализован только вывод в консоль. Ориентировано для работы в docker
 logger:
   console:
     enabled: true
     enable_color: false
-    #Log levels. For production use - level 4, debug - 6
-    log_level: 4
+    #Log levels. For production use - level 4, debug - 6. Рекомендация из нагрузочного
+    #тестирования (см. doc/LOAD_TESTING.md) - 6 резко снижает пропускную способность
+    #за счёт расширенного лога на каждый запрос
+    log_level: ${LOG_LEVEL:-4}
     print_file: true
 
 
@@ -15,59 +16,65 @@ prometheus:
   path: /metrics
   enabled: true
   port: 2112
+  #Детальная метрика с меткой по мак-адресу абонента неограниченно накапливается в
+  #памяти процесса (см. doc/LOAD_TESTING.md - без этого параметра память росла до
+  #~6.8 ГБ за час работы под нагрузкой)
   detailed: false
 
 
-#Profiler pprof. Must be disabled in production
+#Profiler pprof. Диагностический интерфейс, в проде должен быть выключен
 profiler:
   port: 2155
-  enabled: true
+  enabled: false
 
 #Конфигурация радиус-сервера
 radius:
-  listen_addr: 0.0.0.0:1812
-  proto: "udp"
+  listen_addr: ${RADIUS_LISTEN_ADDR:-0.0.0.0:1812}
+  # Обязателен, значения по умолчанию нет намеренно - секрет не должен тихо
+  # подставляться дефолтом
+  secret: ${RADIUS_SECRET}
   # Число горутин-читателей UDP-сокета считается автоматически (NumCPU/2,
   # не больше 4, не меньше 1) - см. third_party/layeh-radius/README-FORK.md
-  read_buffer_size: 8388608
-# Такие параметры как secret можно вынести в переменные окружения. Для этого вместо значения secret необходимо указать ${RADIUS_SECRET}
-# где RADIUS_SECRET - переменная окружения
-  secret: secret
+  # Размер SO_RCVBUF в байтах. 0 - системный default (обычно слишком мал под нагрузкой) -
+  # системный net.core.rmem_max/rmem_default тоже нужно поднять, см. doc/LOAD_TESTING.md
+  read_buffer_size: ${RADIUS_READ_BUFFER_SIZE:-8388608}
 
-#Выбор бэкенда обработки auth/acct/postauth: api (по умолчанию, ниже) или script (Lua, см. блок script)
-processor: script
+#Выбор бэкенда обработки auth/acct/postauth: api или script (Lua, см. блок script)
+processor: ${AUTH_PROCESSOR:-script}
 
-#Встроенный Lua-скрипт (аналог lua-nginx-module/rlm_python). Используется только при processor: script
-#Каждый метод - свой скрипт (можно указать один и тот же файл для нескольких методов).
-#auth обязателен, acct/post_auth опциональны - если путь не задан, метод просто не обрабатывается скриптом.
-#Скрипт компилируется один раз при старте и выполняется в пуле из pool_size изолированных состояний.
-#Пути ниже - примеры из script/examples (относительно корня репозитория). В проде обычно
-#указывают абсолютный путь, например /etc/radius/scripts/auth.lua
+#Встроенный Lua-скрипт (аналог lua-nginx-module/rlm_python). Каждый метод - свой
+#скрипт (auth обязателен, acct/post_auth опциональны). Скрипт компилируется один раз
+#при старте и выполняется в пуле из pool_size изолированных состояний.
+#Пути по умолчанию - относительно корня репозитория (для локального запуска/разработки).
+#В docker-образе (см. install/docker/radius/Dockerfile) эти переменные переопределены
+#на /opt/scripts/*.lua, куда скрипты копируются при сборке
 script:
-  pool_size: 300
-  timeout: 3s
-  auth: script/examples/auth.lua
-  acct: script/examples/acct.lua
-  post_auth: script/examples/post_auth.lua
-  #Опционально: база устройств/смартов/привязок, доступная в скриптах через глобальный db.
-  #Если url не задан - db в скриптах не создаётся.
-  #Адрес базы вынесен в переменную окружения CLIENTDB_URL (аналогично RADIUS_SECRET выше) -
-  #в конфиге он не хранится
+  #Проверено нагрузочным тестированием - дальнейшее увеличение (до 500) не даёт
+  #прироста производительности, см. doc/LOAD_TESTING.md
+  pool_size: ${SCRIPT_POOL_SIZE:-300}
+  timeout: ${SCRIPT_TIMEOUT:-3s}
+  auth: ${SCRIPT_AUTH_PATH:-script/examples/auth.lua}
+  acct: ${SCRIPT_ACCT_PATH:-script/examples/acct.lua}
+  post_auth: ${SCRIPT_POSTAUTH_PATH:-script/examples/post_auth.lua}
+  #База устройств/смартов/привязок, доступная в скриптах через глобальный db. Обязательна
+  #при processor: script - без неё скрипты не могут определить тип оборудования
+  #(db.devices.parse_type) для парсинга circuit_id. Адрес задаётся через переменную
+  #окружения CLIENTDB_URL, в конфиге не хранится
   database:
-    devices_url: ${CLIENTDB_URL}?type=devices # обязательное
+    devices_url: ${CLIENTDB_URL}?type=devices
     #Строки binds имеют вид id;ip;client_mac[;device_mac;port] - id обязателен и должен
     #быть уникален в пределах источника, по нему применяются точечные обновления из redis (см. ниже)
     binds:
       clients: ${CLIENTDB_URL}?type=binds
       smart: ${CLIENTDB_URL}?type=smart
-    refresh_interval: 5m
-    timeout: 90s # binds отдаёт сотни тысяч строк - таймаут на весь запрос, включая чтение тела
+    refresh_interval: ${CLIENTDB_REFRESH_INTERVAL:-5m}
+    timeout: ${CLIENTDB_TIMEOUT:-90s} # binds отдаёт сотни тысяч строк - таймаут на весь запрос, включая чтение тела
     #Опционально: точечные обновления/удаления одной записи binds по id через redis pub/sub,
     #в дополнение к полному refresh_interval-reload по HTTP выше. Если addr не задан - не используется.
     #В канал публикуется JSON вида {"db_type":"clients","action":"add"|"update","object":{"id":123,"ip":<IPINT>,"mac":"...","device_mac":"...","port":44}}
     #или {"db_type":"clients","action":"delete","object":{"id":123}} - device_mac/port опциональны
     redis:
-      addr: ${CLIENTDB_REDIS_ADDR}
+      addr: ${CLIENTDB_REDIS_ADDR:-}
       channel: clientdb-bind-events
 
 #Конфигурирование работы API. Используется только при processor: api
@@ -93,17 +100,17 @@ api:
       enabled: false
       disable_timeout: 60s # На это время API-адрес будет исключен из списка
     addresses:
-      - http://localhost/v2/trusted/equipment/radius/request
+      - ${API_ADDR:-http://localhost:8080/v1}/radius/request
   acct:
     enabled: true
     count_readers: 5
     addresses:
-      - http://localhost/v2/trusted/equipment/radius/acct
+      - ${API_ADDR:-http://localhost:8080/v1}/radius/acct
   #Отправляет результат выдачи IP после ответа на запрос(или паралельно с ответом на запрос)
   postauth:
     enabled: true
     count_readers: 5
     addresses:
-     - http://localhost/v2/trusted/equipment/radius
+      - ${API_ADDR:-http://localhost:8080/v1}/radius
 
   timeout: 3s # Максимальное время ответа API

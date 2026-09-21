@@ -38,9 +38,10 @@ type BindEventObject struct {
 
 // handleRedisMessage - точка входа для сообщений из Redis pub/sub (см. subscribeRedis).
 func (s *Store) handleRedisMessage(payload string) {
+	s.lg.DebugF("clientdb: live-update: received message from redis: %v", payload)
 	var ev BindEvent
 	if err := json.Unmarshal([]byte(payload), &ev); err != nil {
-		s.lg.ErrorF("clientdb: live-update: невалидный json от redis: %v", err)
+		s.lg.ErrorF("clientdb: live-update: invalid json from redis: %v", err)
 		return
 	}
 	if err := s.ApplyBindEvent(ev); err != nil {
@@ -71,27 +72,27 @@ func (s *Store) ApplyBindEvent(ev BindEvent) error {
 func (s *Store) applyBindEventNow(ev BindEvent) error {
 	idx, ok := s.currentSnapshot().binds[ev.DBType]
 	if !ok {
-		return fmt.Errorf("live-update для несуществующего источника binds.%v", ev.DBType)
+		return fmt.Errorf("live-update for non-existent source binds.%v", ev.DBType)
 	}
 
 	id := string(ev.Object.ID)
 	if id == "" {
-		return fmt.Errorf("live-update: object.id не задан (binds.%v)", ev.DBType)
+		return fmt.Errorf("live-update: object.id not set (binds.%v)", ev.DBType)
 	}
 
 	switch ev.Action {
 	case "delete":
 		existed := idx.deleteByID(id)
-		s.lg.NoticeF("clientdb: live-update: binds.%v id=%v удалена (была=%v)", ev.DBType, id, existed)
+		s.lg.NoticeF("clientdb: live-update: binds.%v id=%v deleted (existed=%v)", ev.DBType, id, existed)
 		return nil
 	case "add", "update":
 		mac := normalizeMac(ev.Object.Mac)
 		if mac == "" {
-			return fmt.Errorf("live-update: object.mac не задан (binds.%v id=%v)", ev.DBType, id)
+			return fmt.Errorf("live-update: object.mac not set (binds.%v id=%v)", ev.DBType, id)
 		}
 		ip := intToIP(string(ev.Object.IP))
 		if ip == nil {
-			return fmt.Errorf("live-update: object.ip не распознан (binds.%v id=%v): %q", ev.DBType, id, ev.Object.IP)
+			return fmt.Errorf("live-update: object.ip not recognized (binds.%v id=%v): %q", ev.DBType, id, ev.Object.IP)
 		}
 		b := &Bind{ID: id, IP: ip, ClientMac: mac}
 		if deviceMac := normalizeMac(ev.Object.DeviceMac); deviceMac != "" {
@@ -99,10 +100,10 @@ func (s *Store) applyBindEventNow(ev BindEvent) error {
 			b.Port, _ = strconv.Atoi(string(ev.Object.Port))
 		}
 		existed := idx.upsert(b)
-		s.lg.NoticeF("clientdb: live-update: binds.%v id=%v %v (была=%v): ip=%v mac=%v device_mac=%v port=%v",
+		s.lg.NoticeF("clientdb: live-update: binds.%v id=%v %v (existed=%v): ip=%v mac=%v device_mac=%v port=%v",
 			ev.DBType, id, ev.Action, existed, b.IP, b.ClientMac, b.DeviceMac, b.Port)
 		return nil
 	default:
-		return fmt.Errorf("live-update: неизвестный action %q (binds.%v id=%v)", ev.Action, ev.DBType, id)
+		return fmt.Errorf("live-update: unknown action %q (binds.%v id=%v)", ev.Action, ev.DBType, id)
 	}
 }

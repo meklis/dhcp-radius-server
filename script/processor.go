@@ -39,7 +39,7 @@ type Processor struct {
 
 func NewProcessor(conf Config, lg *logger.Logger) (*Processor, error) {
 	if conf.Auth == "" {
-		return nil, fmt.Errorf("script.auth не задан")
+		return nil, fmt.Errorf("script.auth not set")
 	}
 
 	p := &Processor{lg: lg}
@@ -57,7 +57,7 @@ func NewProcessor(conf Config, lg *logger.Logger) (*Processor, error) {
 		return nil, fmt.Errorf("script.auth (%v): %w", conf.Auth, err)
 	}
 	if !authEngine.HasAuthorize() {
-		return nil, fmt.Errorf("script.auth (%v) не содержит функцию authorize()", conf.Auth)
+		return nil, fmt.Errorf("script.auth (%v) does not contain function authorize()", conf.Auth)
 	}
 	p.authEngine = authEngine
 
@@ -67,7 +67,7 @@ func NewProcessor(conf Config, lg *logger.Logger) (*Processor, error) {
 			return nil, fmt.Errorf("script.acct (%v): %w", conf.Acct, err)
 		}
 		if !acctEngine.HasAccounting() {
-			return nil, fmt.Errorf("script.acct (%v) не содержит функцию accounting()", conf.Acct)
+			return nil, fmt.Errorf("script.acct (%v) does not contain function accounting()", conf.Acct)
 		}
 		p.acctEngine = acctEngine
 		p.acctChannel = make(chan *events.AcctRequest, 100)
@@ -82,7 +82,7 @@ func NewProcessor(conf Config, lg *logger.Logger) (*Processor, error) {
 			return nil, fmt.Errorf("script.post_auth (%v): %w", conf.PostAuth, err)
 		}
 		if !postAuthEngine.HasPostAuth() {
-			return nil, fmt.Errorf("script.post_auth (%v) не содержит функцию post_auth()", conf.PostAuth)
+			return nil, fmt.Errorf("script.post_auth (%v) does not contain function post_auth()", conf.PostAuth)
 		}
 		p.postAuthEngine = postAuthEngine
 		p.postAuthChannel = make(chan postAuthEvent, 100)

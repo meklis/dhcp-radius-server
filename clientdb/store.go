@@ -202,7 +202,7 @@ type Store struct {
 // обновление по HTTP.
 func New(conf Config, lg *logger.Logger) (*Store, error) {
 	if conf.DevicesURL == "" {
-		return nil, fmt.Errorf("clientdb: devices_url не задан")
+		return nil, fmt.Errorf("clientdb: devices_url not set")
 	}
 	if conf.RefreshInterval <= 0 {
 		conf.RefreshInterval = 5 * time.Minute
@@ -238,7 +238,7 @@ func (s *Store) loop() {
 		select {
 		case <-ticker.C:
 			if err := s.reload(); err != nil {
-				s.lg.ErrorF("clientdb: обновление базы не удалось, оставлены старые данные: %v", err)
+				s.lg.ErrorF("clientdb: database update failed, keeping old data: %v", err)
 			}
 		case <-s.stop:
 			return
@@ -277,7 +277,7 @@ func (s *Store) reload() error {
 	}
 
 	s.snap.Store(&snapshot{devices: devices, binds: binds})
-	s.lg.NoticeF("clientdb: база обновлена: devices=%v", len(devices))
+	s.lg.NoticeF("clientdb: database updated: devices=%v", len(devices))
 	bindCounts := make(map[string]int, len(binds))
 	for name, idx := range binds {
 		cnt := idx.Count()
@@ -303,7 +303,7 @@ func (s *Store) finishReload() {
 
 	for _, ev := range pending {
 		if err := s.applyBindEventNow(ev); err != nil {
-			s.lg.ErrorF("clientdb: live-update (отложено на время reload): %v", err)
+			s.lg.ErrorF("clientdb: live-update (deferred during reload): %v", err)
 		}
 	}
 }

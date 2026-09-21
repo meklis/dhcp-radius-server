@@ -79,7 +79,7 @@ func addVendor(p *radius.Packet, vendorID uint32, typ byte, attr radius.Attribut
 func SetString(p *radius.Packet, name, value string) error {
 	info, ok := attrTypes[name]
 	if !ok {
-		return fmt.Errorf("неизвестный атрибут %q", name)
+		return fmt.Errorf("unknown attribute %q", name)
 	}
 	a, err := radius.NewString(value)
 	if err != nil {

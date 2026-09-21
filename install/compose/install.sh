@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Скачивает всё необходимое для запуска dhcp-radius-server через готовый образ
-# из ghcr.io (docker-compose.yml, .env-example, примеры lua-скриптов) в отдельный
-# каталог - без клонирования всего репозитория.
+# из ghcr.io (docker-compose.yml, .env-example, config.yaml, примеры lua-скриптов) в
+# отдельный каталог - без клонирования всего репозитория.
 #
 # Использование:
 #   curl -fsSL https://raw.githubusercontent.com/meklis/dhcp-radius-server/master/install/compose/install.sh | bash
@@ -24,6 +24,13 @@ curl -fsSL "$REPO_RAW/install/compose/.env-example" -o .env-example
 curl -fsSL "$REPO_RAW/script/examples/auth.lua" -o scripts/auth.lua
 curl -fsSL "$REPO_RAW/script/examples/acct.lua" -o scripts/acct.lua
 curl -fsSL "$REPO_RAW/script/examples/post_auth.lua" -o scripts/post_auth.lua
+
+if [ ! -f config.yaml ]; then
+	curl -fsSL "$REPO_RAW/server/radius.server.conf.yml" -o config.yaml
+else
+	curl -fsSL "$REPO_RAW/server/radius.server.conf.yml" -o config.yaml.dist
+	echo "config.yaml уже существует, не перезаписываю - актуальная версия сохранена как config.yaml.dist для сверки."
+fi
 
 if [ ! -f .env ]; then
 	cp .env-example .env

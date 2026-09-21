@@ -16,5 +16,10 @@ LABEL maintainer="Max Boyar <max.boyar.a@gmail.com>"
 RUN apk add --no-cache ca-certificates
 COPY --from=build /out/dhcp-radius-server /opt/dhcp-radius-server
 COPY --from=build /src/script/examples /opt/scripts
-COPY install/docker/radius/radius.conf.yml /opt/radius.conf.yml
+COPY server/radius.server.conf.yml /opt/radius.conf.yml
+# Пути к lua-скриптам в конфиге по умолчанию относительны (для локального запуска из
+# корня репозитория) - переопределяем на путь внутри образа, куда скрипты скопированы выше
+ENV SCRIPT_AUTH_PATH=/opt/scripts/auth.lua
+ENV SCRIPT_ACCT_PATH=/opt/scripts/acct.lua
+ENV SCRIPT_POSTAUTH_PATH=/opt/scripts/post_auth.lua
 ENTRYPOINT ["/opt/dhcp-radius-server", "-c", "/opt/radius.conf.yml"]

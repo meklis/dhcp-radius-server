@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -55,15 +56,41 @@ type Configuration struct {
 	} `yaml:"profiler"`
 }
 
+// envVarPattern матчит ${VAR} и ${VAR:-default} в конфиге.
+var envVarPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}`)
+
+// expandEnvVars подставляет переменные окружения в конфиг. ${VAR:-default} использует
+// default, если VAR не задан или пуст (как в shell). ${VAR} без default обязателен -
+// если такая переменная не задана, возвращается ошибка со списком всех отсутствующих,
+// чтобы не запускать сервер с "тихо" незаполненными обязательными полями (secret, url и т.п.)
+func expandEnvVars(s string) (string, error) {
+	var missing []string
+	result := envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
+		groups := envVarPattern.FindStringSubmatch(match)
+		name, hasDefault, def := groups[1], groups[2] != "", groups[3]
+		if val, ok := os.LookupEnv(name); ok && val != "" {
+			return val
+		}
+		if hasDefault {
+			return def
+		}
+		missing = append(missing, name)
+		return match
+	})
+	if len(missing) > 0 {
+		return "", fmt.Errorf("required environment variables not set: %v", strings.Join(missing, ", "))
+	}
+	return result, nil
+}
+
 func LoadConfig(path string, Config *Configuration) error {
 	bytes, err := ioutil.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	yamlConfig := string(bytes)
-	for _, e := range os.Environ() {
-		pair := strings.SplitN(e, "=", 2)
-		yamlConfig = strings.ReplaceAll(yamlConfig, fmt.Sprintf("${%v}", pair[0]), pair[1])
+	yamlConfig, err := expandEnvVars(string(bytes))
+	if err != nil {
+		return err
 	}
 	err = yaml.Unmarshal([]byte(yamlConfig), &Config)
 	fmt.Printf(`Loaded configuration from %v with env readed:

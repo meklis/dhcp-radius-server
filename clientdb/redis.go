@@ -27,7 +27,7 @@ func (s *Store) subscribeRedis(conf RedisConfig) error {
 		return nil
 	}
 	if conf.Channel == "" {
-		return fmt.Errorf("redis.channel не задан")
+		return fmt.Errorf("redis.channel not set")
 	}
 
 	client := redis.NewClient(&redis.Options{
@@ -61,6 +61,6 @@ func (s *Store) subscribeRedis(conf RedisConfig) error {
 		}
 	}()
 
-	s.lg.NoticeF("clientdb: подписка на точечные обновления binds через redis %v канал %q", conf.Addr, conf.Channel)
+	s.lg.NoticeF("clientdb: subscribed to point binds updates via redis %v channel %q", conf.Addr, conf.Channel)
 	return nil
 }
