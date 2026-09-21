@@ -93,34 +93,39 @@ circuitParsers["zte"] = function(circuit)
     return vlan, stack, stack * 100000 + p * 1000 + o
 end
 
--- BDCOM: два варианта длины (оба подтверждены трафиком/реальными данными):
---   10 hex (5 байт) - vlan(2Б), неиспользуемый байт, stack(1Б), port_raw(1Б)
---   8 hex (4 байта) - vlan(2Б), stack(1Б), port_raw(1Б), без неиспользуемого байта
-circuitParsers["bdcom"] = function(circuit)
-    local vlan, stack, portRaw
-    if #circuit == 8 then
-        vlan, stack, portRaw = hexByte(circuit, 1, 4), hexByte(circuit, 5, 2), hexByte(circuit, 7, 2)
-    else
-        vlan, stack, portRaw = hexByte(circuit, 1, 4), hexByte(circuit, 7, 2), hexByte(circuit, 9, 2)
-    end
-    if not vlan or not stack or not portRaw then
-        return nil
-    end
-    return vlan, stack, stack * 1000 + portRaw
-end
-
-circuitParsers["cdata"] = circuitParsers["bdcom"]
-
-circuitParsers["dlink"] = function(circuit)
-    local vlan, stack, port = hexByte(circuit, 5, 4), hexByte(circuit, 9, 2), hexByte(circuit, 11, 2)
+circuitParsers["edgecore"] = function(circuit)
+    local stack, port, vlan = hexByte(circuit, 1, 2), hexByte(circuit, 3, 2), hexByte(circuit, 5, 4)
     if not vlan or not stack or not port then
         return nil
     end
     return vlan, stack, port
 end
 
-circuitParsers["edgecore"] = function(circuit)
-    local stack, port, vlan = hexByte(circuit, 1, 2), hexByte(circuit, 3, 2), hexByte(circuit, 5, 4)
+circuitParsers["bdcom"] = function(circuit)
+    if #circuit == 8 then
+        local stack, port, vlan = hexByte(circuit, 1, 2), hexByte(circuit, 3, 2), hexByte(circuit, 5, 4)
+        if not vlan or not stack or not port then
+            return nil
+        end
+        return vlan, stack, port
+    end
+    local vlan, stack, portRaw = hexByte(circuit, 1, 4), hexByte(circuit, 7, 2), hexByte(circuit, 9, 2)
+    if not vlan or not stack or not portRaw then
+        return nil
+    end
+    return vlan, stack, stack * 1000 + portRaw
+end
+
+circuitParsers["cdata"] = function(circuit)
+    local vlan, stack, portRaw = hexByte(circuit, 1, 4), hexByte(circuit, 7, 2), hexByte(circuit, 9, 2)
+    if not vlan or not stack or not portRaw then
+        return nil
+    end
+    return vlan, stack, stack * 1000 + portRaw
+end
+
+circuitParsers["dlink"] = function(circuit)
+    local vlan, stack, port = hexByte(circuit, 5, 4), hexByte(circuit, 9, 2), hexByte(circuit, 11, 2)
     if not vlan or not stack or not port then
         return nil
     end

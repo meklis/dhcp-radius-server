@@ -183,9 +183,15 @@ func TestEngineWithDBCdataParser(t *testing.T) {
 func TestEngineWithDBBdcomParserShort(t *testing.T) {
 	e := testEngineWithDB(t)
 
-	// bdcom, короткий вариант (4 байта/8 hex, без unused-байта): circuit_id=0A900001 ->
-	// vlan=0x0A90=2704, stack=0, port_raw=1 -> port=1. Подтверждено реальными данными
-	// (vlan_id=2704, slot=0, port=1 из внешней системы учёта интерфейсов)
+	// bdcom, короткий вариант (4 байта/8 hex): раньше здесь ожидалась "родная"
+	// bdcom-раскладка (vlan=0x0A90=2704, stack=0, port_raw=1 -> port=1), которая была
+	// помечена как подтверждённая внешней системой учёта интерфейсов - но сверка
+	// 847 реальных request/response пар этого формата через tools/pcapreplay против
+	// прод-сервера показала 0/847 совпадений с этой раскладкой и 847/847 с
+	// edgecore-раскладкой (см. circuitParsers["bdcom"] в auth.lua) - таким образом,
+	// прежнее "подтверждение" было ошибочным. circuit_id=0A900001 по edgecore-раскладке:
+	// stack=0x0A=10, port=0x90=144, vlan=0x0001=1 - бинда на порту 144 в фикстуре нет,
+	// поэтому ожидаем общий FAKE-пул, а не персональный IP
 	resp, err := e.CallAuthorize(&events.AuthRequest{
 		NasIp:     "10.0.0.1",
 		DeviceMac: "1122334455AA",
@@ -197,8 +203,8 @@ func TestEngineWithDBBdcomParserShort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallAuthorize: %v", err)
 	}
-	if resp.IpAddress != "1.2.3.9" {
-		t.Errorf("expected ip_address=1.2.3.9, got %+v", resp)
+	if resp.PoolName != "INET-1-FAKE" || resp.LeaseTimeSec != 120 {
+		t.Errorf("expected pool_name=INET-1-FAKE lease=120, got %+v", resp)
 	}
 }
 
