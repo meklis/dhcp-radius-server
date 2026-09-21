@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/meklis/all-ok-radius-server/macaddr"
 	"github.com/meklis/all-ok-radius-server/prom"
 )
 
@@ -93,7 +94,7 @@ func (s *Store) applyBindEventNow(ev BindEvent) error {
 		s.lg.NoticeF("clientdb: live-update: binds.%v id=%v deleted (existed=%v)", ev.DBType, id, existed)
 		return nil
 	case "add", "update":
-		mac := normalizeMac(ev.Object.Mac)
+		mac := macaddr.Normalize(ev.Object.Mac)
 		if mac == "" {
 			return fmt.Errorf("live-update: object.mac not set (binds.%v id=%v)", ev.DBType, id)
 		}
@@ -102,7 +103,7 @@ func (s *Store) applyBindEventNow(ev BindEvent) error {
 			return fmt.Errorf("live-update: object.ip not recognized (binds.%v id=%v): %q", ev.DBType, id, ev.Object.IP)
 		}
 		b := &Bind{ID: id, IP: ip, ClientMac: mac}
-		if deviceMac := normalizeMac(ev.Object.DeviceMac); deviceMac != "" {
+		if deviceMac := macaddr.Normalize(ev.Object.DeviceMac); deviceMac != "" {
 			b.DeviceMac = deviceMac
 			b.Port, _ = strconv.Atoi(string(ev.Object.Port))
 		}

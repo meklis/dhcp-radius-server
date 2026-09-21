@@ -207,7 +207,11 @@ function authorize(request)
     local portBinds = db:getBind("clients", "", macSw, port)
 
     -- если привязка ровно одна - она и есть ответ для этого порта, независимо
-    -- от того, чей мак в ней записан. Если их несколько - ищем свою по мак-адресу
+    -- от того, чей мак в ней записан. Если их несколько - ищем свою по мак-адресу.
+    -- Оба значения (macAbon и b.client_mac) уже приведены к единому формату
+    -- AA:BB:CC:DD:EE:FF на стороне Go (см. macaddr.Normalize - применяется и к
+    -- request.device_mac при разборе RADIUS-пакета, и к client_mac при загрузке
+    -- clientdb), поэтому их можно сравнивать как обычные строки без нормализации здесь
     local candidate = nil
     if #portBinds == 1 then
         candidate = portBinds[1]

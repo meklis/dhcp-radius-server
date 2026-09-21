@@ -13,13 +13,17 @@ import (
 // clients: реальная привязка (744D280EE846) на порту 3; порт 6 отдан под IPTV (2.2.2.2)
 // под чужим маком (AABBCCDDEEFF) - имитирует checkAbonIPTV; порт 7 - две личные
 // привязки разных абонентов на одном порту (несколько подключенных за одним свитч-портом);
-// порт 8 отдан под Wifi (4.4.4.4) - имитирует checkAbonWifi; порт 10 - "youtube" (5.5.5.5)
+// порт 8 отдан под Wifi (4.4.4.4) - имитирует checkAbonWifi; порт 10 - "youtube" (5.5.5.5);
+// порт 11 - своя привязка на реальный IP СОСУЩЕСТВУЕТ на порту с IPTV-заглушкой
+// (2.2.2.2 под чужим маком) - должна выигрывать своя привязка, а не общий IPTV-пул
 const clientsBindsData = "1;16909060;744D280EE846;085A119465E0;3\n" +
 	"2;33686018;AABBCCDDEEFF;085A119465E0;6\n" +
 	"3;16909061;AAAAAAAAAAAA;085A119465E0;7\n" +
 	"4;16909062;BBBBBBBBBBBB;085A119465E0;7\n" +
 	"6;67372036;CCCCCCCCCCCD;085A119465E0;8\n" +
-	"7;84215045;CCCCCCCCCCCE;085A119465E0;10\n"
+	"7;84215045;CCCCCCCCCCCE;085A119465E0;10\n" +
+	"9;2996209395;0096DF35AC12;085A119465E0;11\n" +
+	"10;33686018;AAAAAAAAAAAA;085A119465E0;11\n"
 
 func testDBServer(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -193,10 +197,15 @@ func TestEngineWithDBBdcomParserShort(t *testing.T) {
 func TestEngineWithDBMultipleBindsMatchByMac(t *testing.T) {
 	e := testEngineWithDB(t)
 
-	// порт 7 - две привязки (AAAAAAAAAAAA и BBBBBBBBBBBB), выбираем свою по мак-адресу
+	// порт 7 - две привязки (AAAAAAAAAAAA и BBBBBBBBBBBB), выбираем свою по мак-адресу.
+	// DeviceMac намеренно с двоеточиями - как реально приходит User-Name от коммутатора
+	// в проде (см. TestEngineWithDBWifiMacFallback/^66:99: - этот формат подтверждён
+	// самим кодом auth.lua), а не как b.client_mac хранится в clientdb (без разделителей,
+	// см. clientdb/store.go:normalizeMac) - раньше тест писал DeviceMac без двоеточий
+	// и этим маскировал реальный баг сравнения форматов в auth.lua
 	resp, err := e.CallAuthorize(&events.AuthRequest{
 		NasIp:     "10.0.0.1",
-		DeviceMac: "AAAAAAAAAAAA",
+		DeviceMac: "AA:AA:AA:AA:AA:AA",
 		AgentOption: &events.AuthRequestOption{
 			RemoteId:     "08:5A:11:94:65:E0",
 			RawCircuitId: "000000650007", // vlan=101, port=7
@@ -217,7 +226,7 @@ func TestEngineWithDBMultipleBindsNoMacMatch(t *testing.T) {
 	// ни одна из них не магический IP - никакого совпадения, обычный фолбэк
 	resp, err := e.CallAuthorize(&events.AuthRequest{
 		NasIp:     "10.0.0.1",
-		DeviceMac: "CCCCCCCCCCCC",
+		DeviceMac: "CC:CC:CC:CC:CC:CC",
 		AgentOption: &events.AuthRequestOption{
 			RemoteId:     "08:5A:11:94:65:E0",
 			RawCircuitId: "000000650007",
@@ -228,6 +237,33 @@ func TestEngineWithDBMultipleBindsNoMacMatch(t *testing.T) {
 	}
 	if resp.PoolName != "INET-101-FAKE" || resp.LeaseTimeSec != 120 {
 		t.Errorf("expected pool_name=INET-101-FAKE lease=120, got %+v", resp)
+	}
+}
+
+func TestEngineWithDBOwnBindBeatsSharedIPTVOnSamePort(t *testing.T) {
+	e := testEngineWithDB(t)
+
+	// порт 11 - своя привязка на реальный IP (178.150.134.243) сосуществует с
+	// IPTV-заглушкой (2.2.2.2) под чужим маком. Должны получить именно свой реальный
+	// IP, а не общий INET-*-FAKE пул с Triolan.IPTV - до фикса нормализации мака в
+	// auth.lua (b.client_mac сравнивался с "сырым" request.device_mac без нормализации)
+	// сравнение никогда не совпадало и клиент ошибочно падал в общий IPTV-пул
+	resp, err := e.CallAuthorize(&events.AuthRequest{
+		NasIp:     "10.0.0.1",
+		DeviceMac: "00:96:DF:35:AC:12",
+		AgentOption: &events.AuthRequestOption{
+			RemoteId:     "08:5A:11:94:65:E0",
+			RawCircuitId: "00000065000B", // vlan=101, port=11
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallAuthorize: %v", err)
+	}
+	if resp.IpAddress != "178.150.134.243" {
+		t.Errorf("expected ip_address=178.150.134.243, got %+v", resp)
+	}
+	if resp.PoolName != "" {
+		t.Errorf("expected no pool_name (direct ip), got %+v", resp)
 	}
 }
 

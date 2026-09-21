@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/meklis/all-ok-radius-server/logger"
+	"github.com/meklis/all-ok-radius-server/macaddr"
 	"github.com/meklis/all-ok-radius-server/prom"
 )
 
@@ -335,7 +336,7 @@ func (s *Store) loadDevices(url string) (map[string]Device, error) {
 		if len(fields) < 3 {
 			continue
 		}
-		mac := normalizeMac(fields[1])
+		mac := macaddr.Normalize(fields[1])
 		if mac == "" {
 			continue
 		}
@@ -389,13 +390,13 @@ func parseBindFields(fields []string) (*Bind, bool) {
 	if id == "" {
 		return nil, false
 	}
-	clientMac := normalizeMac(fields[2])
+	clientMac := macaddr.Normalize(fields[2])
 	if clientMac == "" {
 		return nil, false
 	}
 	b := &Bind{ID: id, IP: intToIP(fields[1]), ClientMac: clientMac}
 	if len(fields) >= 5 {
-		b.DeviceMac = normalizeMac(fields[3])
+		b.DeviceMac = macaddr.Normalize(fields[3])
 		b.Port, _ = strconv.Atoi(strings.TrimSpace(fields[4]))
 	}
 	return b, true
@@ -415,7 +416,7 @@ func (s *Store) currentSnapshot() *snapshot {
 }
 
 func (s *Store) GetDeviceByMac(mac string) (Device, bool) {
-	d, ok := s.currentSnapshot().devices[normalizeMac(mac)]
+	d, ok := s.currentSnapshot().devices[macaddr.Normalize(mac)]
 	return d, ok
 }
 
@@ -431,8 +432,8 @@ func (s *Store) GetBind(dbName, mac, deviceMac, port string) []Bind {
 		return nil
 	}
 
-	mac = normalizeMac(mac)
-	deviceMac = normalizeMac(deviceMac)
+	mac = macaddr.Normalize(mac)
+	deviceMac = macaddr.Normalize(deviceMac)
 	port = normalizePort(port)
 
 	idx.mu.RLock()
@@ -474,18 +475,6 @@ func (s *Store) GetBindByID(dbName, id string) (Bind, bool) {
 		return Bind{}, false
 	}
 	return *b, true
-}
-
-func normalizeMac(s string) string {
-	s = strings.ToUpper(s)
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		if (r >= '0' && r <= '9') || (r >= 'A' && r <= 'F') {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }
 
 func normalizePort(port string) string {

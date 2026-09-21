@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/meklis/all-ok-radius-server/macaddr"
 	"github.com/meklis/all-ok-radius-server/prom"
 	"github.com/meklis/all-ok-radius-server/radius/events"
 	extraAttributes "github.com/meklis/all-ok-radius-server/radius/extra_attributes"
@@ -101,7 +102,11 @@ func (rad *Radius) _handleAuthRequest(w radius.ResponseWriter, r *radius.Request
 func (rad *Radius) _parseAuthRequest(r *radius.Request) (events.AuthRequest, error) {
 	nasName := rfc2865.NASIdentifier_GetString(r.Packet)
 	nasIpAddr := rfc2865.NASIPAddress_Get(r.Packet).String()
-	deviceMAC := rfc2865.UserName_GetString(r.Packet)
+	// User-Name приходит в формате конкретного вендора NAS (с разделителями/без,
+	// в разном регистре) - приводим к единому виду здесь, на границе разбора пакета,
+	// чтобы дальше (script/api, логи, метрики) везде был один и тот же формат мака
+	// и его можно было сравнивать как обычную строку, не нормализуя на месте
+	deviceMAC := macaddr.Normalize(rfc2865.UserName_GetString(r.Packet))
 	dhcpServerName := rfc2865.CalledStationID_GetString(r.Packet)
 	dhcpServerId := rfc2865.CallingStationID_GetString(r.Packet)
 	rad.lg.DebugF("%v %x: nasName=%v, nasIpAddr=%v, deviceMac=%v, dhcpServerName=%v, dhcpServerId=%v", r.Code.String(), r.Authenticator, nasName, nasIpAddr, deviceMAC, dhcpServerName, dhcpServerId)
@@ -138,7 +143,7 @@ func (rad *Radius) _handleAccountingRequest(w radius.ResponseWriter, r *radius.R
 func (rad *Radius) _parseAccountingRequest(r *radius.Request) (events.AcctRequest, error) {
 	nasName := rfc2865.NASIdentifier_GetString(r.Packet)
 	nasIpAddr := rfc2865.NASIPAddress_Get(r.Packet).String()
-	deviceMAC := rfc2865.UserName_GetString(r.Packet)
+	deviceMAC := macaddr.Normalize(rfc2865.UserName_GetString(r.Packet))
 	dhcpServerName := rfc2865.CalledStationID_GetString(r.Packet)
 	dhcpServerId := rfc2865.CallingStationID_GetString(r.Packet)
 	ipAddr := rfc2865.FramedIPAddress_Get(r.Packet)
