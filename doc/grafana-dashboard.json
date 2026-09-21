@@ -1,0 +1,239 @@
+{
+  "title": "DHCP RADIUS Server",
+  "uid": "dhcp-radius-server",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["radius", "dhcp"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "editable": true,
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "regex": ""
+      },
+      {
+        "name": "host",
+        "label": "NAS host",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": { "query": "label_values(rad_request_count, host)", "refId": "StandardVariableQuery" },
+        "current": {},
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "sort": 1,
+        "hide": 0,
+        "regex": ""
+      }
+    ]
+  },
+  "panels": [
+    { "id": 1, "type": "row", "title": "Overview", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "collapsed": false, "panels": [] },
+
+    {
+      "id": 2, "type": "stat", "title": "Server version",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "mappings": [], "noValue": "n/a" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value_and_name", "colorMode": "background", "graphMode": "none" },
+      "targets": [ { "expr": "rad_sys_version", "legendFormat": "{{version}} ({{build_date}})", "refId": "A" } ]
+    },
+    {
+      "id": 3, "type": "stat", "title": "Requests/sec (total)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "expr": "sum(rate(rad_request_count{host=~\"$host\"}[5m]))", "refId": "A" } ]
+    },
+    {
+      "id": 4, "type": "stat", "title": "Critical errors/min",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 10 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "expr": "sum(rate(rad_critical_count[5m])) * 60", "refId": "A" } ]
+    },
+    {
+      "id": 5, "type": "stat", "title": "clientdb: last reload age",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 600 }, { "color": "red", "value": 1800 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "expr": "time() - rad_clientdb_last_reload_timestamp_seconds", "refId": "A" } ]
+    },
+
+    {
+      "id": 6, "type": "timeseries", "title": "Requests/sec by NAS host",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "expr": "sum by (host) (rate(rad_request_count{host=~\"$host\"}[5m]))", "legendFormat": "{{host}}", "refId": "A" } ]
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Responses/sec by type (IP vs pool)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum(rate(rad_request_ip_count{host=~\"$host\"}[5m]))", "legendFormat": "ip_address", "refId": "A" },
+        { "expr": "sum(rate(rad_request_pool_count{host=~\"$host\"}[5m]))", "legendFormat": "pool", "refId": "B" }
+      ]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Top 10 pools by requests/sec",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "expr": "topk(10, sum by (pool_name) (rate(rad_request_by_pool_count{host=~\"$host\"}[5m])))", "legendFormat": "{{pool_name}}", "refId": "A" } ]
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Errors/sec by level and caller",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum by (caller) (rate(rad_critical_count[5m]))", "legendFormat": "critical: {{caller}}", "refId": "A" },
+        { "expr": "sum by (caller) (rate(rad_errors_count[5m]))", "legendFormat": "error: {{caller}}", "refId": "B" },
+        { "expr": "sum by (caller) (rate(rad_warnings_count[5m]))", "legendFormat": "warning: {{caller}}", "refId": "C" }
+      ]
+    },
+
+    { "id": 10, "type": "row", "title": "ClientDB & live updates (processor: script)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 }, "collapsed": false, "panels": [] },
+
+    {
+      "id": 11, "type": "stat", "title": "Devices loaded",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "expr": "rad_clientdb_devices_count", "refId": "A" } ]
+    },
+    {
+      "id": 12, "type": "stat", "title": "Redis live-update connection",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [ { "type": "value", "options": { "0": { "text": "DISCONNECTED", "color": "red" }, "1": { "text": "CONNECTED", "color": "green" } } } ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+          "noValue": "not configured"
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "none", "textMode": "value" },
+      "targets": [ { "expr": "rad_clientdb_redis_connected", "refId": "A" } ]
+    },
+    {
+      "id": 13, "type": "stat", "title": "Last reload age",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 600 }, { "color": "red", "value": 1800 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "expr": "time() - rad_clientdb_last_reload_timestamp_seconds", "refId": "A" } ]
+    },
+    {
+      "id": 14, "type": "stat", "title": "Last live-update age",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "s", "noValue": "not configured", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 600 }, { "color": "red", "value": 3600 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none" },
+      "targets": [ { "expr": "time() - rad_clientdb_live_update_last_timestamp_seconds", "refId": "A" } ]
+    },
+
+    {
+      "id": 15, "type": "timeseries", "title": "Binds loaded by source",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "expr": "rad_clientdb_binds_count", "legendFormat": "{{source}}", "refId": "A" } ]
+    },
+    {
+      "id": 16, "type": "timeseries", "title": "Live-update messages/sec, by source",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum by (db_type) (rate(rad_clientdb_live_update_received_count[5m]))", "legendFormat": "received: {{db_type}}", "refId": "A" },
+        { "expr": "sum by (db_type) (rate(rad_clientdb_live_update_errors_count[5m]))", "legendFormat": "errors: {{db_type}}", "refId": "B" }
+      ]
+    },
+
+    { "id": 17, "type": "row", "title": "API backend (processor: api)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 }, "collapsed": false, "panels": [] },
+
+    {
+      "id": 18, "type": "state-timeline", "title": "API address alive status",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 43 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [ { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } } ]
+        },
+        "overrides": []
+      },
+      "options": { "showValue": "never" },
+      "targets": [ { "expr": "rad_api_alive_status", "legendFormat": "{{api_addr}}", "refId": "A" } ]
+    },
+    {
+      "id": 19, "type": "timeseries", "title": "Post-auth / acct queue length",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 43 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "rad_api_post_auth_queue_len", "legendFormat": "post_auth", "refId": "A" },
+        { "expr": "rad_api_acct_queue_len", "legendFormat": "acct", "refId": "B" }
+      ]
+    },
+    {
+      "id": 20, "type": "timeseries", "title": "Response cache size",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 51 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "expr": "rad_cache_responses_count", "refId": "A" } ]
+    },
+
+    { "id": 21, "type": "row", "title": "Process runtime", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 59 }, "collapsed": false, "panels": [] },
+
+    {
+      "id": 22, "type": "timeseries", "title": "Goroutines",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 60 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "expr": "go_goroutines{job=~\".*radius.*\"}", "refId": "A" } ]
+    },
+    {
+      "id": 23, "type": "timeseries", "title": "Heap allocated",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 60 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "expr": "go_memstats_heap_alloc_bytes{job=~\".*radius.*\"}", "refId": "A" } ]
+    },
+    {
+      "id": 24, "type": "timeseries", "title": "CPU usage",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 60 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "expr": "rate(process_cpu_seconds_total{job=~\".*radius.*\"}[5m])", "refId": "A" } ]
+    }
+  ]
+}

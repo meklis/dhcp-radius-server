@@ -3,7 +3,9 @@ package clientdb
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/meklis/all-ok-radius-server/prom"
 	redis "github.com/redis/go-redis/v9"
 )
 
@@ -41,12 +43,15 @@ func (s *Store) subscribeRedis(conf RedisConfig) error {
 	if _, err := sub.Receive(ctx); err != nil {
 		sub.Close()
 		client.Close()
+		prom.SetClientDBRedisConnected(false)
 		return fmt.Errorf("subscribe %q: %w", conf.Channel, err)
 	}
+	prom.SetClientDBRedisConnected(true)
 
 	go func() {
 		defer client.Close()
 		defer sub.Close()
+		defer prom.SetClientDBRedisConnected(false)
 		ch := sub.Channel()
 		for {
 			select {
@@ -61,6 +66,32 @@ func (s *Store) subscribeRedis(conf RedisConfig) error {
 		}
 	}()
 
+	go s.watchRedisConnection(client)
+
 	s.lg.NoticeF("clientdb: subscribed to point binds updates via redis %v channel %q", conf.Addr, conf.Channel)
 	return nil
+}
+
+// watchRedisConnection periodically pings redis to track connection status
+// (rad_clientdb_redis_connected) independently of the pub/sub subscription itself -
+// go-redis reconnects the subscription internally on transient network errors and
+// does not expose that disconnect/reconnect state, so a separate health check is
+// the only reliable way to observe it.
+func (s *Store) watchRedisConnection(client *redis.Client) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := client.Ping(ctx).Err()
+			cancel()
+			prom.SetClientDBRedisConnected(err == nil)
+			if err != nil {
+				s.lg.WarningF("clientdb: redis ping failed: %v", err)
+			}
+		}
+	}
 }

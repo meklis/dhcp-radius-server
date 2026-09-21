@@ -74,6 +74,22 @@ var (
 		Name: "rad_clientdb_last_reload_timestamp_seconds",
 		Help: "Unix timestamp of the last successful clientdb reload",
 	}, []string{})
+	clientDBRedisConnected = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "rad_clientdb_redis_connected",
+		Help: "Connection status of the clientdb redis live-update subscription (1=connected, 0=disconnected)",
+	}, []string{})
+	clientDBLiveUpdateReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "rad_clientdb_live_update_received_count",
+		Help: "Count of live-update messages received from redis, by bind source",
+	}, []string{"db_type"})
+	clientDBLiveUpdateErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "rad_clientdb_live_update_errors_count",
+		Help: "Count of live-update messages from redis that failed to apply, by bind source",
+	}, []string{"db_type"})
+	clientDBLiveUpdateLastTimestamp = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "rad_clientdb_live_update_last_timestamp_seconds",
+		Help: "Unix timestamp of the last live-update message received from redis",
+	}, []string{})
 	PromEnabled                bool
 	PromDetailedMacInfoEnabled bool
 )
@@ -188,6 +204,38 @@ func SetClientDBLastReload(unixSeconds int64) {
 		return
 	}
 	clientDBLastReloadTimestamp.With(map[string]string{}).Set(float64(unixSeconds))
+}
+
+func SetClientDBRedisConnected(connected bool) {
+	if !PromEnabled {
+		return
+	}
+	status := 0
+	if connected {
+		status = 1
+	}
+	clientDBRedisConnected.With(map[string]string{}).Set(float64(status))
+}
+
+func IncClientDBLiveUpdateReceived(dbType string) {
+	if !PromEnabled {
+		return
+	}
+	clientDBLiveUpdateReceived.With(map[string]string{"db_type": dbType}).Inc()
+}
+
+func IncClientDBLiveUpdateError(dbType string) {
+	if !PromEnabled {
+		return
+	}
+	clientDBLiveUpdateErrors.With(map[string]string{"db_type": dbType}).Inc()
+}
+
+func SetClientDBLiveUpdateLastTimestamp(unixSeconds int64) {
+	if !PromEnabled {
+		return
+	}
+	clientDBLiveUpdateLastTimestamp.With(map[string]string{}).Set(float64(unixSeconds))
 }
 
 func SysInfo(version string, buildDate string) {

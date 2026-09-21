@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
+
+	"github.com/meklis/all-ok-radius-server/prom"
 )
 
 // BindEvent - точечное изменение одной записи в bind-источнике (см. Config.Binds),
@@ -39,13 +42,17 @@ type BindEventObject struct {
 // handleRedisMessage - точка входа для сообщений из Redis pub/sub (см. subscribeRedis).
 func (s *Store) handleRedisMessage(payload string) {
 	s.lg.DebugF("clientdb: live-update: received message from redis: %v", payload)
+	prom.SetClientDBLiveUpdateLastTimestamp(time.Now().Unix())
 	var ev BindEvent
 	if err := json.Unmarshal([]byte(payload), &ev); err != nil {
 		s.lg.ErrorF("clientdb: live-update: invalid json from redis: %v", err)
+		prom.IncClientDBLiveUpdateError("")
 		return
 	}
+	prom.IncClientDBLiveUpdateReceived(ev.DBType)
 	if err := s.ApplyBindEvent(ev); err != nil {
 		s.lg.ErrorF("clientdb: live-update: %v", err)
+		prom.IncClientDBLiveUpdateError(ev.DBType)
 	}
 }
 

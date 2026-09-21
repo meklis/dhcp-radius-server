@@ -1,0 +1,118 @@
+groups:
+  - name: dhcp-radius-server
+    rules:
+      # --- Загальна доступність/трафік ---
+
+      - alert: RadiusNoRequests
+        expr: sum(rate(rad_request_count[5m])) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "RADIUS-сервер не отримує запитів"
+          description: "За останні 5 хвилин немає жодного запиту (rad_request_count). Можлива причина - процес не піднявся, порт не слухається, або NAS/свитчі не можуть достукатись до сервера."
+
+      - alert: RadiusCriticalErrorsHigh
+        expr: sum(rate(rad_critical_count[5m])) * 60 > 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Високий рівень critical-помилок RADIUS ({{ $value | printf \"%.1f\" }}/хв)"
+          description: "rad_critical_count росте швидше 5/хв протягом 5 хвилин. Дивись лог рівня CRITICAL (error get answer from processor / circuit_id parse failed / unknown request type тощо)."
+
+      - alert: RadiusErrorsElevated
+        expr: sum(rate(rad_errors_count[5m])) * 60 > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Підвищений рівень помилок RADIUS ({{ $value | printf \"%.1f\" }}/хв)"
+          description: "rad_errors_count вище норми протягом 10 хвилин - можлива деградація (наприклад помилки формування відповіді)."
+
+      - alert: RadiusNoSuccessfulResponses
+        expr: sum(rate(rad_request_ip_count[5m])) + sum(rate(rad_request_pool_count[5m])) == 0 and sum(rate(rad_request_count[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Запити є, але жоден не завершується успішною видачею IP/пула"
+          description: "rad_request_count > 0, але ні rad_request_ip_count, ні rad_request_pool_count не ростуть - усі запити падають в помилку (CRITICAL) або мовчки таймаутяться."
+
+      # --- ClientDB (processor: script) ---
+
+      - alert: ClientDBReloadStale
+        expr: time() - rad_clientdb_last_reload_timestamp_seconds > 1800
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "База clientdb не оновлювалась понад 15 хвилин"
+          description: "time() - rad_clientdb_last_reload_timestamp_seconds = {{ $value | printf \"%.0f\" }}с. При типовому script.database.refresh_interval=5m це означає, що останні кілька спроб reload по CLIENTDB_URL falи (див. лог 'clientdb: database update failed')."
+
+      - alert: ClientDBEmpty
+        expr: rad_clientdb_devices_count == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "clientdb: список пристроїв порожній"
+          description: "rad_clientdb_devices_count == 0 - авторизація по script.database не зможе визначити parse_type жодного свитча/OLT, усі запити з option82 підуть у fallback/помилку."
+
+      - alert: ClientDBRedisDisconnected
+        expr: rad_clientdb_redis_connected == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "clientdb: втрачено з'єднання з Redis (live-updates)"
+          description: "rad_clientdb_redis_connected == 0 - точкові live-оновлення binds не застосовуються, дані актуалізуються лише повним reload раз на script.database.refresh_interval. Не є критичним само по собі (reload - джерело істини), але деградує затримку оновлень."
+
+      - alert: ClientDBLiveUpdateStale
+        expr: rad_clientdb_redis_connected == 1 and (time() - rad_clientdb_live_update_last_timestamp_seconds) > 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "clientdb: немає live-оновлень з Redis понад годину при живому з'єднанні"
+          description: "Підписка активна (rad_clientdb_redis_connected == 1), але повідомлень немає більше години. Якщо зовнішня система очікувано публікує зміни часто - перевір, чи вона дійсно пише в канал (PUBLISH), можливо проблема на її стороні, а не в radius-server."
+
+      - alert: ClientDBLiveUpdateErrorsHigh
+        expr: sum(rate(rad_clientdb_live_update_errors_count[5m])) * 60 > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Багато помилок застосування live-оновлень clientdb ({{ $value | printf \"%.1f\" }}/хв)"
+          description: "rad_clientdb_live_update_errors_count росте - зовнішня система публікує повідомлення в форматі, який radius-server не може застосувати (невалідний json, невідомий db_type/action, відсутні обов'язкові поля). Див. doc/REDIS_BIND_EVENTS.md."
+
+      # --- API backend (processor: api) ---
+
+      - alert: RadiusAPIAddressDown
+        expr: rad_api_alive_status == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API-адреса {{ $labels.api_addr }} недоступна"
+          description: "rad_api_alive_status для {{ $labels.api_addr }} дорівнює 0 понад 3 хвилини (processor: api)."
+
+      - alert: RadiusAPIQueueGrowing
+        expr: rad_api_post_auth_queue_len > 1000 or rad_api_acct_queue_len > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Черга post_auth/acct до API не встигає розбиратись"
+          description: "rad_api_post_auth_queue_len/rad_api_acct_queue_len стабільно високі - API не встигає приймати події, можлива втрата даних при подальшому рості (processor: api)."
+
+      # --- Процес/рантайм ---
+
+      - alert: RadiusGoroutinesHigh
+        expr: go_goroutines{job=~".*radius.*"} > 20000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Аномально багато горутин ({{ $value }})"
+          description: "Можлива витік горутин (goroutine leak) - типове значення під навантаженням див. doc/LOAD_TESTING.md."
