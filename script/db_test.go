@@ -12,11 +12,14 @@ import (
 
 // clients: реальная привязка (744D280EE846) на порту 3; порт 6 отдан под IPTV (2.2.2.2)
 // под чужим маком (AABBCCDDEEFF) - имитирует checkAbonIPTV; порт 7 - две личные
-// привязки разных абонентов на одном порту (несколько подключенных за одним свитч-портом)
+// привязки разных абонентов на одном порту (несколько подключенных за одним свитч-портом);
+// порт 8 отдан под Wifi (4.4.4.4) - имитирует checkAbonWifi; порт 10 - "youtube" (5.5.5.5)
 const clientsBindsData = "1;16909060;744D280EE846;085A119465E0;3\n" +
 	"2;33686018;AABBCCDDEEFF;085A119465E0;6\n" +
 	"3;16909061;AAAAAAAAAAAA;085A119465E0;7\n" +
-	"4;16909062;BBBBBBBBBBBB;085A119465E0;7\n"
+	"4;16909062;BBBBBBBBBBBB;085A119465E0;7\n" +
+	"6;67372036;CCCCCCCCCCCD;085A119465E0;8\n" +
+	"7;84215045;CCCCCCCCCCCE;085A119465E0;10\n"
 
 func testDBServer(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -91,6 +94,55 @@ func TestEngineWithDBSharedPortIPTV(t *testing.T) {
 	}
 	if resp.PoolName != "INET-101-FAKE" {
 		t.Errorf("expected pool_name=INET-101-FAKE, got %+v", resp)
+	}
+	if resp.ExtraAttributes["Mikrotik-Address-List"] != "Triolan.IPTV" {
+		t.Errorf("expected mikrotik Address-List=Triolan.IPTV, got %+v", resp.ExtraAttributes)
+	}
+}
+
+func TestEngineWithDBSharedPortWifi(t *testing.T) {
+	e := testEngineWithDB(t)
+
+	// порт 8 целиком отдан под Triolan.Wifi (4.4.4.4)
+	resp, err := e.CallAuthorize(&events.AuthRequest{
+		NasIp:     "10.0.0.1",
+		DeviceMac: "112233445566",
+		AgentOption: &events.AuthRequestOption{
+			RemoteId:     "08:5A:11:94:65:E0",
+			RawCircuitId: "000000650008", // vlan=101, port=8
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallAuthorize: %v", err)
+	}
+	if resp.PoolName != "INET-101-FAKE" {
+		t.Errorf("expected pool_name=INET-101-FAKE, got %+v", resp)
+	}
+	if resp.ExtraAttributes["Mikrotik-Address-List"] != "Triolan.Wifi" {
+		t.Errorf("expected mikrotik Address-List=Triolan.Wifi, got %+v", resp.ExtraAttributes)
+	}
+}
+
+func TestEngineWithDBYoutubeBind(t *testing.T) {
+	e := testEngineWithDB(t)
+
+	// порт 10 - личная привязка на "youtube"-адрес (5.5.5.5)
+	resp, err := e.CallAuthorize(&events.AuthRequest{
+		NasIp:     "10.0.0.1",
+		DeviceMac: "CCCCCCCCCCCE",
+		AgentOption: &events.AuthRequestOption{
+			RemoteId:     "08:5A:11:94:65:E0",
+			RawCircuitId: "00000065000A", // vlan=101, port=10
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallAuthorize: %v", err)
+	}
+	if resp.PoolName != "YOUTUBE-101" {
+		t.Errorf("expected pool_name=YOUTUBE-101, got %+v", resp)
+	}
+	if resp.ExtraAttributes["Mikrotik-Address-List"] != "Triolan.Youtube" {
+		t.Errorf("expected mikrotik Address-List=Triolan.Youtube, got %+v", resp.ExtraAttributes)
 	}
 }
 

@@ -214,7 +214,9 @@ script:
 `accounting` для `script.acct`, `post_auth` для `script.post_auth`. Якщо функція відсутня в
 зазначеному файлі - сервер не запуститься і явно вкаже на це в логу.
 * `authorize(request) -> table` - повинна повернути таблицю з `ip_address` або `pool_name`
-  (опціонально `lease_time_sec`), або `{error = "..."}` для відмови
+  (опціонально `lease_time_sec`, `extra_attributes` - таблиця `{["Mikrotik-Address-List"]="...", ...}`
+  з додатковими RADIUS-атрибутами у відповідь, ключ - повне ім'я атрибуту),
+  або `{error = "..."}` для відмови
 * `accounting(request)` - без значення, що повертається
 * `post_auth(request, response)` - повідомлення про фінальну відповідь, відправлену NAS-у, без
   значення, що повертається

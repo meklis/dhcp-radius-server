@@ -7,7 +7,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/meklis/all-ok-radius-server/redback"
+	"github.com/meklis/all-ok-radius-server/radius/redback"
 	"layeh.com/radius"
 	"layeh.com/radius/rfc2865"
 	"layeh.com/radius/rfc2869"

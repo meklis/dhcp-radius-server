@@ -62,6 +62,7 @@ func authResponseToTable(L *lua.LState, r *events.AuthResponse) *lua.LTable {
 	t.RawSetString("status", lua.LString(r.Status))
 	t.RawSetString("error", lua.LString(r.Error))
 	t.RawSetString("class_id", lua.LString(r.Class))
+	t.RawSetString("extra_attributes", stringMapToTable(L, r.ExtraAttributes))
 	return t
 }
 
@@ -92,11 +93,12 @@ func tableToAuthResponse(ret lua.LValue) (*events.AuthResponse, error) {
 	}
 
 	resp := &events.AuthResponse{
-		IpAddress:    getTableString(tbl, "ip_address"),
-		PoolName:     getTableString(tbl, "pool_name"),
-		LeaseTimeSec: getTableInt(tbl, "lease_time_sec"),
-		Status:       getTableString(tbl, "status"),
-		Error:        getTableString(tbl, "error"),
+		IpAddress:       getTableString(tbl, "ip_address"),
+		PoolName:        getTableString(tbl, "pool_name"),
+		LeaseTimeSec:    getTableInt(tbl, "lease_time_sec"),
+		Status:          getTableString(tbl, "status"),
+		Error:           getTableString(tbl, "error"),
+		ExtraAttributes: getTableStringMap(tbl, "extra_attributes"),
 	}
 
 	if resp.Error != "" {
@@ -122,4 +124,29 @@ func getTableInt(t *lua.LTable, key string) int {
 		return int(n)
 	}
 	return 0
+}
+
+// getTableStringMap читает t[key] как таблицу вида {[string]=string, ...} (не массив).
+// Отсутствующее поле или не-таблица - nil, без ошибки (поле опционально).
+func getTableStringMap(t *lua.LTable, key string) map[string]string {
+	sub, ok := t.RawGetString(key).(*lua.LTable)
+	if !ok {
+		return nil
+	}
+	var out map[string]string
+	sub.ForEach(func(k, v lua.LValue) {
+		if out == nil {
+			out = make(map[string]string)
+		}
+		out[k.String()] = v.String()
+	})
+	return out
+}
+
+func stringMapToTable(L *lua.LState, m map[string]string) *lua.LTable {
+	t := L.NewTable()
+	for k, v := range m {
+		t.RawSetString(k, lua.LString(v))
+	}
+	return t
 }

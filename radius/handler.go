@@ -7,8 +7,9 @@ import (
 
 	"github.com/meklis/all-ok-radius-server/prom"
 	"github.com/meklis/all-ok-radius-server/radius/events"
-	"github.com/meklis/all-ok-radius-server/redback"
-	"github.com/meklis/all-ok-radius-server/redback_agent_parsers"
+	extraAttributes "github.com/meklis/all-ok-radius-server/radius/extra_attributes"
+	"github.com/meklis/all-ok-radius-server/radius/redback"
+	"github.com/meklis/all-ok-radius-server/radius/redback_agent_parsers"
 	"github.com/ztrue/tracerr"
 	"layeh.com/radius"
 	"layeh.com/radius/rfc2865"
@@ -204,8 +205,14 @@ func (rad *Radius) _respondAuthAccept(response events.AuthResponse, w radius.Res
 			rad.lg.ErrorF("error set response SessionTimeOut=%v", response.LeaseTimeSec)
 		}
 	}
+	for name, value := range response.ExtraAttributes {
+		if err := extraAttributes.SetString(r.Packet, name, value); err != nil {
+			prom.ErrorsInc(prom.Error, "radius")
+			rad.lg.ErrorF("error set response %v=%v: %v", name, value, err)
+		}
+	}
 	r.Code = radius.CodeAccessAccept
-	rad.lg.DebugF("%v %x: ipAddress='%v', poolName='%v', lease_time='%v'", r.Code, r.Authenticator, response.IpAddress, response.PoolName, response.LeaseTimeSec)
+	rad.lg.DebugF("%v %x: ipAddress='%v', poolName='%v', lease_time='%v', extraAttrs='%v'", r.Code, r.Authenticator, response.IpAddress, response.PoolName, response.LeaseTimeSec, response.ExtraAttributes)
 
 	err := w.Write(r.Packet)
 	if err != nil {

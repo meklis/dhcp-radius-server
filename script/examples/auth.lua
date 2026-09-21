@@ -14,11 +14,15 @@
 --   request.option.circuit_id - option82 Agent-Circuit-Id, hex-строка без "0x", или nil
 --
 -- ВОЗВРАТ authorize():
---   ip_address     - выдать конкретный IP (приоритетнее pool_name, если заданы оба)
---   pool_name      - выдать имя пула (DHCP-сервер сам берёт IP из пула)
---   lease_time_sec - время аренды в секундах (Session-Timeout)
---   error          - если задано, остальные поля игнорируются: клиенту не отвечаем вовсе
---                    (RADIUS-таймаут на NAS, а не Access-Reject)
+--   ip_address           - выдать конкретный IP (приоритетнее pool_name, если заданы оба)
+--   pool_name            - выдать имя пула (DHCP-сервер сам берёт IP из пула)
+--   lease_time_sec       - время аренды в секундах (Session-Timeout)
+--   extra_attributes     - таблица {["Mikrotik-Address-List"]="...", ...} с
+--                          дополнительными RADIUS-атрибутами в ответ (полное имя ->
+--                          значение), список поддерживаемых имён см. attrTypes на
+--                          стороне Go
+--   error                - если задано, остальные поля игнорируются: клиенту не отвечаем
+--                          вовсе (RADIUS-таймаут на NAS, а не Access-Reject)
 --
 -- ГЛОБАЛЬНЫЕ ОБЪЕКТЫ:
 --   db:getDeviceByMac(mac) -> table{ip, mac, parse_type} | nil
@@ -212,7 +216,7 @@ function authorize(request)
 
     if candidate then
         if candidate.ip == "5.5.5.5" then
-            return { pool_name = "YOUTUBE-" .. vlan, lease_time_sec = leaseInet }
+            return { pool_name = "YOUTUBE-" .. vlan, lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.Youtube" } }
         elseif candidate.ip ~= "2.2.2.2" and candidate.ip ~= "4.4.4.4" then
             return { ip_address = candidate.ip, lease_time_sec = leaseInet }
         end
@@ -222,12 +226,12 @@ function authorize(request)
     -- привязка не найдена среди нескольких на порту
     for _, b in ipairs(portBinds) do
         if b.ip == "4.4.4.4" then
-            return { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = leaseInet }
+            return { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.Wifi" } }
         end
     end
     for _, b in ipairs(portBinds) do
         if b.ip == "2.2.2.2" then
-            return { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = leaseInet }
+            return { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.IPTV" } }
         end
     end
 

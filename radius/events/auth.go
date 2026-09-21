@@ -40,6 +40,10 @@ type AuthResponse struct {
 	Status       string    `json:"status"`
 	Error        string    `json:"error"`
 	Class        string    `json:"class_id"`
+	// ExtraAttributes - дополнительные RADIUS-атрибуты в ответ, полное имя
+	// (например "Mikrotik-Address-List") -> значение. Список поддерживаемых
+	// имён см. attrTypes.
+	ExtraAttributes map[string]string `json:"extra_attributes"`
 }
 
 type RadiusResponseType int
