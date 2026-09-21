@@ -101,11 +101,19 @@ func tableToAuthResponse(ret lua.LValue) (*events.AuthResponse, error) {
 		ExtraAttributes: getTableStringMap(tbl, "extra_attributes"),
 	}
 
+	// reject - явное бизнес-решение скрипта отказать этому устройству (аналог
+	// RLM_MODULE_REJECT в legacy Perl-скрипте, см. script.pl). Проверяется раньше
+	// error - если скрипт зачем-то заполнил оба поля, явный отказ приоритетнее
+	if reject := getTableString(tbl, "reject"); reject != "" {
+		return nil, events.NewRejectError(errors.New(reject))
+	}
+	// error - скрипт определил, что не может разобрать/обслужить этот конкретный
+	// запрос (например не распарсился circuit_id) - аналог RLM_MODULE_INVALID
 	if resp.Error != "" {
-		return nil, errors.New(resp.Error)
+		return nil, events.NewInvalidError(errors.New(resp.Error))
 	}
 	if resp.IpAddress == "" && resp.PoolName == "" {
-		return nil, errors.New("authorize() returned empty ip_address and pool_name")
+		return nil, events.NewInvalidError(errors.New("authorize() returned empty ip_address and pool_name"))
 	}
 	return resp, nil
 }

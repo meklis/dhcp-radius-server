@@ -41,6 +41,13 @@ func TestCallAuthorizeError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error without configured db, got nil")
 	}
+	// без store глобальная переменная db не создаётся вовсе (см. db.go:registerDB) -
+	// authorize() падает на индексации nil, это Lua-паника (инфраструктурная
+	// проблема, KindError), а не бизнес-решение скрипта (KindInvalid) - для
+	// последнего см. TestTableToAuthResponse в convert_test.go
+	if kind := events.ClassifyAuthError(err); kind != events.KindError {
+		t.Errorf("expected KindError (db not configured -> lua panic), got %v", kind)
+	}
 }
 
 func TestCallAccounting(t *testing.T) {

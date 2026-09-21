@@ -40,10 +40,12 @@ func (rad *Radius) _handleAuthRequest(w radius.ResponseWriter, r *radius.Request
 	classId := rad.getClassId()
 	req, err := rad._parseAuthRequest(r)
 	if err != nil {
+		// разбор самого RADIUS-пакета - инфраструктурная проблема (KindError), а не
+		// решение по конкретному устройству: молчим, NAS переспросит
 		prom.ErrorsInc(prom.Critical, "radius")
 		rad.lg.Criticalf("response from radius-server: %v", err.Error())
 		rad.processor.SendPostAuth(req, events.AuthResponse{
-			Status: "ERROR",
+			Status: string(events.KindError),
 			Error:  fmt.Sprintf("%v", err),
 			Class:  classId,
 		})
@@ -55,18 +57,33 @@ func (rad *Radius) _handleAuthRequest(w radius.ResponseWriter, r *radius.Request
 		prom.ErrorsInc(prom.Critical, "radius")
 		rad.lg.CriticalF("error get answer from processor: client_mac=%v %v", req.DeviceMac, err.Error())
 		rad.lg.DebugF("%v", tracerr.Sprint(err))
+		// KindInvalid/KindReject - скрипт/api приняли решение об этом конкретном
+		// запросе (не распарсился circuit_id, явный бизнес-отказ) -> Access-Reject.
+		// KindError (в т.ч. любая необёрнутая ошибка) - инфраструктурная проблема,
+		// не связанная с этим устройством -> молчим, см. events.AuthErrorKind
+		kind := events.ClassifyAuthError(err)
+		if kind != events.KindError {
+			if rejErr := rad._respondAuthReject(w, r, classId); rejErr != nil {
+				rad.lg.ErrorF("error write reject response: %v", rejErr.Error())
+			}
+		}
 		rad.processor.SendPostAuth(req, events.AuthResponse{
-			Status: "ERROR",
+			Status: string(kind),
 			Error:  fmt.Sprintf("%v", err),
 			Class:  classId,
 		})
 		return
 	} else if resp.IpAddress == "" && resp.PoolName == "" {
+		// ответ структурно получен, но обслужить нечем - это решение по конкретному
+		// запросу (KindInvalid), а не инфраструктурная проблема
 		prom.ErrorsInc(prom.Critical, "radius")
 		rad.lg.CriticalF("error get answer from processor: client_mac=%v pool_name and ip_address is empty", req.DeviceMac)
+		if rejErr := rad._respondAuthReject(w, r, classId); rejErr != nil {
+			rad.lg.ErrorF("error write reject response: %v", rejErr.Error())
+		}
 		rad.processor.SendPostAuth(req, events.AuthResponse{
-			Status: "ERROR",
-			Error:  fmt.Sprintf("%v", err),
+			Status: string(events.KindInvalid),
+			Error:  "pool_name and ip_address is empty",
 			Class:  classId,
 		})
 		return
@@ -86,8 +103,11 @@ func (rad *Radius) _handleAuthRequest(w radius.ResponseWriter, r *radius.Request
 	err = rad._respondAuthAccept(*resp, w, r)
 
 	if err != nil {
+		// сбой записи ответа в сокет - транспортная проблема (KindError), не решение
+		// по устройству; повторная попытка Write с reject тут не поможет (сокет/пакет
+		// уже показали проблему) - молчим, NAS переспросит
 		rad.processor.SendPostAuth(req, events.AuthResponse{
-			Status: "ERROR",
+			Status: string(events.KindError),
 			Error:  fmt.Sprintf("%v", err),
 			Class:  classId,
 		})
@@ -175,6 +195,31 @@ func (rad *Radius) _parseAccountingRequest(r *radius.Request) (events.AcctReques
 	d, _ := json.Marshal(&request)
 	rad.lg.DebugF("%v %x: %v", r.Code.String(), r.Authenticator, string(d))
 	return request, nil
+}
+
+// _respondAuthReject sends an explicit Access-Reject. Used for events.KindInvalid/
+// KindReject failures (see radius/events/auth_error.go) - a decision about this
+// specific request, not an infrastructure problem. Before commit b89eb33 (2020) an
+// equivalent reject was sent on every error path including infrastructure failures;
+// that was dropped in favor of always staying silent, which turned out to diverge
+// from the legacy Perl/FreeRADIUS script still running in production (see
+// script.pl:authenticate - RLM_MODULE_INVALID there reliably produces a real
+// Access-Reject, confirmed by replaying a real production capture through this
+// server, see tools/pcapreplay) - restored for the request-specific cases only
+func (rad *Radius) _respondAuthReject(w radius.ResponseWriter, r *radius.Request, classId string) error {
+	r.Attributes = make(radius.Attributes)
+	if classId != "" {
+		if err := rfc2865.Class_SetString(r.Packet, classId); err != nil {
+			prom.ErrorsInc(prom.Error, "radius")
+			rad.lg.ErrorF("error generate reject response packet with className=%v", classId)
+		}
+	}
+	r.Code = radius.CodeAccessReject
+	rad.lg.DebugF("%v %x: rejected", r.Code, r.Authenticator)
+	if err := w.Write(r.Packet); err != nil {
+		return tracerr.Wrap(err)
+	}
+	return nil
 }
 
 func (rad *Radius) _respondAuthAccept(response events.AuthResponse, w radius.ResponseWriter, r *radius.Request) error {
