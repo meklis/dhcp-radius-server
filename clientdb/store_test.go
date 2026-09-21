@@ -176,7 +176,7 @@ func TestApplyBindEventUpsertAndDelete(t *testing.T) {
 	if len(binds) != 1 || binds[0].IP.String() == "" {
 		t.Fatalf("new record not visible after add: %+v", binds)
 	}
-	if b, ok := s.GetBindByID("smart", "99"); !ok || b.ClientMac != "AA11BB22CC33" {
+	if b, ok := s.GetBindByID("smart", "99"); !ok || b.ClientMac != "AA:11:BB:22:CC:33" {
 		t.Fatalf("GetBindByID after add: %+v, ok=%v", b, ok)
 	}
 
