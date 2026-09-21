@@ -94,16 +94,11 @@ func buildRealisticPacket(secret string, site Site, opts Options, rnd *rand.Rand
 	}
 
 	// option-82. По умолчанию remote-id (мак свитча) не отправляем: сервер
-	// (см. script/examples/auth.lua) для таких запросов не ходит во внешнюю
-	// clientdb, а сразу отдаёт "серый" пул по vlan из circuit-id - это гарантирует
-	// реальный Access-Accept без зависимости от внешней базы устройств. circuit-id
-	// собираем в формате dlink-парсера сервера (2 байта заголовка + vlan(2б) +
-	// stack(1б) + port(1б), итого 6 байт/12 hex-символов), чтобы decode всегда
-	// проходил успешно (см. circuitParsers["dlink"] и parseTypeByUnknownDevice).
-	//
-	// Если задан -switch-macs (реальные маки свитчей из внешней clientdb), часть
-	// запросов (см. -known-device-percent) идёт с remote-id одного из них - это
-	// прогоняет полный путь с обращением в clientdb/binds.
+	// (см. script/examples/auth.lua) без remote-id теперь отвечает явным
+	// Access-Reject, не ходя во внешнюю clientdb вовсе - для прогона полного
+	// пути с обращением в clientdb/binds нужен -switch-macs (реальные маки
+	// свитчей из внешней clientdb), часть запросов (см. -known-device-percent)
+	// тогда идёт с remote-id одного из них.
 	vlan := rnd.Intn(4094) + 1
 	stack := byte(rnd.Intn(4))
 	port := byte(rnd.Intn(48) + 1)

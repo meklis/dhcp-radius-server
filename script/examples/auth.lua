@@ -79,13 +79,8 @@ local function hexToStr(hex)
     return table.concat(chars)
 end
 
--- парсеры circuit-id по db.devices.parse_type. circuit_id - сырые байты сабопции
--- option82 как есть (без срезов на стороне Go) - смещения свои под каждый вендор свитча
 local circuitParsers = {}
 
--- ZTE OLT: текстовый s=slot p=port o=onu v=vlan m=src-mac (подтверждено трафиком и
--- конфигом устройства). m= не используется - macSw для этого формата определяется
--- отдельно, см. authorize()
 circuitParsers["zte"] = function(circuit)
     local raw = hexToStr((circuit:gsub("^0[xX]", "")))
     local vlan = tonumber(raw:match("v=(%d+)"))
@@ -114,11 +109,8 @@ circuitParsers["bdcom"] = function(circuit)
     return vlan, stack, stack * 1000 + portRaw
 end
 
--- C-Data: те же смещения, что и bdcom (по perl-скрипту - общее семейство BDcom-cicrNN),
--- НЕ подтверждено трафиком этого сервера
 circuitParsers["cdata"] = circuitParsers["bdcom"]
 
--- D-Link: 6 байт - 2 байта заголовка, vlan, module/stack, port (подтверждено трафиком)
 circuitParsers["dlink"] = function(circuit)
     local vlan, stack, port = hexByte(circuit, 5, 4), hexByte(circuit, 9, 2), hexByte(circuit, 11, 2)
     if not vlan or not stack or not port then
@@ -127,8 +119,6 @@ circuitParsers["dlink"] = function(circuit)
     return vlan, stack, port
 end
 
--- Edgecore: смещения из perl-скрипта минус 1 байт заголовка (по аналогии с dlink/bdcom),
--- НЕ подтверждено трафиком этого сервера
 circuitParsers["edgecore"] = function(circuit)
     local stack, port, vlan = hexByte(circuit, 1, 2), hexByte(circuit, 3, 2), hexByte(circuit, 5, 4)
     if not vlan or not stack or not port then
@@ -152,25 +142,6 @@ local function circuitReader(circuit, parseType)
     return vlan, stack, port
 end
 
--- Определение parse_type без похода в db - применяется когда remote-id отсутствует
--- и искать устройство по мак-адресу свитча не по чему. Пробует по очереди:
---   1. самоописываемый текстовый ZTE-формат (s=.. p=.. o=.. v=.. m=..)
---   2. длину circuit_id, как в perl-скрипте: dlink - 6 байт (12 hex), bdcom - 5 байт
---      (10 hex), обе длины подтверждены реальным трафиком. Для cdata/edgecore
---      подтверждённой длины нет - по длине их не различаем
-local function parseTypeByUnknownDevice(circuit)
-    if hexToStr(circuit):match("^s=%d") then
-        return "zte"
-    end
-    local len = #circuit
-    if len == 12 then
-        return "dlink"
-    elseif len == 10 then
-        return "bdcom"
-    end
-    return nil
-end
-
 -- IP-заглушки в binds - не настоящие адреса, а маркеры "весь порт отдан под
 -- общий сервисный пул". 2.2.2.2/4.4.4.4/5.5.5.5 включают соответствующий флаг,
 -- 1.1.1.1/3.3.3.3 зарезервированы под будущие сервисы - сейчас ни на что не
@@ -178,10 +149,6 @@ end
 local FLAG_BY_IP = { ["2.2.2.2"] = "iptv", ["4.4.4.4"] = "wifi", ["5.5.5.5"] = "youtube" }
 local RESERVED_IPS = { ["1.1.1.1"] = true, ["3.3.3.3"] = true }
 
--- getPortBinds запрашивает все привязки клиента на порту устройства и разбирает их на:
---   1. binds - привязки на реальные IP (все 5 IP-заглушек исключены)
---   2. flags - {iptv=bool, wifi=bool, youtube=bool}: какие общие сервисные
---      пулы отданы под этот порт целиком
 local function getPortBinds(macSw, port)
     local all = db:getBind("clients", "", macSw, port)
     local binds, flags = {}, {}
@@ -202,33 +169,26 @@ function authorize(request)
     local circuitId = request.option.circuit_id or ""
 
     -- без remote-id нет мака свитча - ни db:getDeviceByMac, ни привязки по устройству+порту
-    -- недоступны в принципе. К базе вообще не обращаемся - определяем vlan прямо из
-    -- circuit_id (текстовый ZTE-формат или по длине) и выдаём общий "серый" пул
+    -- недоступны в принципе, обслужить запрос нечем
     if macSw == "" then
-        local parseType = parseTypeByUnknownDevice(circuitId)
-        local vlan = circuitReader(circuitId, parseType)
-
-        log.debug("authorize: mac=" .. macAbon .. " mac_sw= parse_type=" .. tostring(parseType) .. " vlan=" .. tostring(vlan))
-
-        if not vlan then
-            return { error = "circuit_id parse failed: mac_sw= parse_type=" .. tostring(parseType) .. " circuit_id=" .. circuitId }
-        end
-        return { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = TIMEOUT_FAKE }
+        log.warning("authorize: mac=" .. macAbon .. " mac_sw=<UNKNOWN> reject: no remote_id")
+        return { reject = "no remote_id: circuit_id=" .. circuitId }
     end
 
-    local parseType = nil
     local device = db:getDeviceByMac(macSw)
-    if device then
-        parseType = device.parse_type
+    if not device then
+        log.warning("authorize: mac=" .. macAbon .. " mac_sw=" .. macSw .. " reject: device not found")
+        return { reject = "device not found: mac_sw=" .. macSw }
     end
 
-    local vlan, stack, port = circuitReader(circuitId, parseType)
+    local vlan, stack, port = circuitReader(circuitId, device.parse_type)
 
     log.debug("authorize: mac=" .. macAbon .. " mac_sw=" .. macSw ..
-        " parse_type=" .. tostring(parseType) .. " vlan=" .. tostring(vlan) .. " port=" .. tostring(port))
+        " parse_type=" .. tostring(device.parse_type) .. " vlan=" .. tostring(vlan) .. " port=" .. tostring(port))
 
     if not vlan then
-        return { error = "circuit_id parse failed: mac_sw=" .. macSw .. " parse_type=" .. tostring(parseType) .. " circuit_id=" .. circuitId }
+        log.warning("authorize: mac=" .. macAbon .. " mac_sw=" .. macSw .. " parse_type=" .. tostring(device.parse_type) .. " reject: circuit_id parse failed")
+        return { error = "circuit_id parse failed: mac_sw=" .. macSw .. " parse_type=" .. tostring(device.parse_type) .. " circuit_id=" .. circuitId }
     end
 
     local leaseInet = leaseTime()

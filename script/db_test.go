@@ -368,64 +368,45 @@ func TestEngineWithDBWifiMacFallback(t *testing.T) {
 	}
 }
 
-func TestEngineWithDBZteTextFormatNoRemoteId(t *testing.T) {
+func TestEngineWithDBNoRemoteIdRejects(t *testing.T) {
 	e := testEngineWithDB(t)
 
-	// ZTE OLT (l2-relay-agent): remote_id отсутствует, circuit_id - самоописываемый
-	// текстовый формат (s=3 p=1 o=13 v=2146 m=e848.b842.2f7d) - тип парсинга должен
-	// определиться по виду circuit_id, без похода в db по пустому macSw
-	resp, err := e.CallAuthorize(&events.AuthRequest{
+	// без remote_id мака свитча нет и обслужить запрос нечем - явный reject,
+	// вне зависимости от того, что в circuit_id (раньше тут был эвристический
+	// фолбэк по виду/длине circuit_id - parseTypeByUnknownDevice, убран)
+	_, err := e.CallAuthorize(&events.AuthRequest{
 		NasIp:     "10.0.0.1",
 		DeviceMac: "E8:48:B8:42:2F:7D",
 		AgentOption: &events.AuthRequestOption{
 			RawCircuitId: "733D3320703D31206F3D313320763D32313436206D3D653834382E623834322E32663764",
 		},
 	})
-	if err != nil {
-		t.Fatalf("CallAuthorize: %v", err)
+	if err == nil {
+		t.Fatal("expected reject without remote_id, got nil error")
 	}
-	if resp.PoolName != "INET-2146-FAKE" || resp.LeaseTimeSec != 120 {
-		t.Errorf("expected pool_name=INET-2146-FAKE lease=120, got %+v", resp)
-	}
-}
-
-func TestEngineWithDBNoRemoteIdLengthFallbackDlink(t *testing.T) {
-	e := testEngineWithDB(t)
-
-	// remote_id отсутствует, circuit_id - 12 hex (6 байт), формат не ZTE-текст -
-	// тип парсинга определяется по длине (dlink), а не через db
-	resp, err := e.CallAuthorize(&events.AuthRequest{
-		NasIp:     "10.0.0.1",
-		DeviceMac: "999999999999",
-		AgentOption: &events.AuthRequestOption{
-			RawCircuitId: "000000650009", // vlan=101, port=9
-		},
-	})
-	if err != nil {
-		t.Fatalf("CallAuthorize: %v", err)
-	}
-	if resp.PoolName != "INET-101-FAKE" || resp.LeaseTimeSec != 120 {
-		t.Errorf("expected pool_name=INET-101-FAKE lease=120, got %+v", resp)
+	if kind := events.ClassifyAuthError(err); kind != events.KindReject {
+		t.Errorf("expected KindReject, got %v", kind)
 	}
 }
 
-func TestEngineWithDBNoRemoteIdLengthFallbackBdcom(t *testing.T) {
+func TestEngineWithDBUnknownDeviceRejects(t *testing.T) {
 	e := testEngineWithDB(t)
 
-	// remote_id отсутствует, circuit_id - 10 hex (5 байт) - тип парсинга
-	// определяется по длине (bdcom)
-	resp, err := e.CallAuthorize(&events.AuthRequest{
+	// remote_id задан, но такого свитча нет в devices (db:getDeviceByMac вернул nil) -
+	// явный reject, никакого фолбэка по виду/длине circuit_id больше нет
+	_, err := e.CallAuthorize(&events.AuthRequest{
 		NasIp:     "10.0.0.1",
 		DeviceMac: "999999999999",
 		AgentOption: &events.AuthRequestOption{
-			RawCircuitId: "0065000209", // vlan=101, stack=2, port_raw=9 -> port=2009
+			RemoteId:     "FFFFFFFFFFFF",
+			RawCircuitId: dlinkCircuitID,
 		},
 	})
-	if err != nil {
-		t.Fatalf("CallAuthorize: %v", err)
+	if err == nil {
+		t.Fatal("expected reject for unknown device, got nil error")
 	}
-	if resp.PoolName != "INET-101-FAKE" || resp.LeaseTimeSec != 120 {
-		t.Errorf("expected pool_name=INET-101-FAKE lease=120, got %+v", resp)
+	if kind := events.ClassifyAuthError(err); kind != events.KindReject {
+		t.Errorf("expected KindReject, got %v", kind)
 	}
 }
 
