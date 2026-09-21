@@ -208,6 +208,30 @@ func TestEngineWithDBBdcomParserShort(t *testing.T) {
 	}
 }
 
+func TestEngineWithDBVlanZeroRejects(t *testing.T) {
+	e := testEngineWithDB(t)
+
+	// circuit_id=0000000205 (bdcom, 5-байтный вариант) даёт vlan=0 - в legacy
+	// Perl-скрипте "if(!$vlan)" реджектит и это (0 - falsy в Perl), не только
+	// undef. Подтверждено сверкой через tools/pcapreplay на реальном трафике
+	// (kharkov.pcap): 98/98 сессий с vlan=0 из circuit_id реально получают
+	// Access-Reject на проде - раньше мы ошибочно выдавали Accept на "INET-0-FAKE"
+	_, err := e.CallAuthorize(&events.AuthRequest{
+		NasIp:     "10.0.0.1",
+		DeviceMac: "1122334455AA",
+		AgentOption: &events.AuthRequestOption{
+			RemoteId:     "AA:BB:CC:DD:EE:11",
+			RawCircuitId: "0000000205",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected reject for vlan=0, got nil error")
+	}
+	if kind := events.ClassifyAuthError(err); kind != events.KindInvalid {
+		t.Errorf("expected KindInvalid, got %v", kind)
+	}
+}
+
 func TestEngineWithDBMultipleBindsMatchByMac(t *testing.T) {
 	e := testEngineWithDB(t)
 
@@ -379,14 +403,14 @@ func TestEngineWithDBWifiMacFallback(t *testing.T) {
 func TestEngineWithDBNoRemoteIdRejects(t *testing.T) {
 	e := testEngineWithDB(t)
 
-	// без remote_id мака свитча нет и обслужить запрос нечем - явный reject,
-	// вне зависимости от того, что в circuit_id (раньше тут был эвристический
-	// фолбэк по виду/длине circuit_id - parseTypeByUnknownDevice, убран)
+	// без remote_id мака свитча нет, а circuit_id не в самоописываемом ZTE-формате
+	// (см. TestEngineWithDBNoRemoteIdZteStillParses) - тип парсера определить
+	// неоткуда, обслужить запрос нечем, явный reject
 	_, err := e.CallAuthorize(&events.AuthRequest{
 		NasIp:     "10.0.0.1",
-		DeviceMac: "E8:48:B8:42:2F:7D",
+		DeviceMac: "999999999999",
 		AgentOption: &events.AuthRequestOption{
-			RawCircuitId: "733D3320703D31206F3D313320763D32313436206D3D653834382E623834322E32663764",
+			RawCircuitId: dlinkCircuitID,
 		},
 	})
 	if err == nil {
@@ -394,6 +418,29 @@ func TestEngineWithDBNoRemoteIdRejects(t *testing.T) {
 	}
 	if kind := events.ClassifyAuthError(err); kind != events.KindReject {
 		t.Errorf("expected KindReject, got %v", kind)
+	}
+}
+
+func TestEngineWithDBNoRemoteIdZteStillParses(t *testing.T) {
+	e := testEngineWithDB(t)
+
+	// ZTE OLT (l2-relay-agent) иногда не шлёт remote-id вовсе, но circuit_id в этом
+	// случае самоописываемый текстовый формат (s=3 p=1 o=13 v=2146 m=e848.b842.2f7d) -
+	// тип парсера однозначен без похода в db. Подтверждено сверкой через
+	// tools/pcapreplay на реальном трафике (kharkov.pcap): без этой ветки
+	// реджектились 30/31 сессий, которые прод реально принимает
+	resp, err := e.CallAuthorize(&events.AuthRequest{
+		NasIp:     "10.0.0.1",
+		DeviceMac: "E8:48:B8:42:2F:7D",
+		AgentOption: &events.AuthRequestOption{
+			RawCircuitId: "733D3320703D31206F3D313320763D32313436206D3D653834382E623834322E32663764",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallAuthorize: %v", err)
+	}
+	if resp.PoolName != "INET-2146-FAKE" || resp.LeaseTimeSec != 120 {
+		t.Errorf("expected pool_name=INET-2146-FAKE lease=120, got %+v", resp)
 	}
 }
 

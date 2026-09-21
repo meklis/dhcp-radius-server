@@ -199,33 +199,48 @@ function authorize(request)
     local macSw = request.option.remote_id or ""
     local circuitId = request.option.circuit_id or ""
 
-    -- без remote-id нет мака свитча - ни db:getDeviceByMac, ни привязки по устройству+порту
-    -- недоступны в принципе, обслужить запрос нечем
-    if macSw == "" then
+    local parseType
+    if macSw ~= "" then
+        local device = db:getDeviceByMac(macSw)
+        if not device then
+            log.warning("authorize: mac=" .. macAbon .. " mac_sw=" .. macSw .. " reject: device not found")
+            return { reject = "device not found: mac_sw=" .. macSw }
+        end
+        parseType = device.parse_type
+    elseif hexToStr(circuitId):match("^s=%d") then
+        -- ZTE OLT (l2-relay-agent) иногда не шлёт remote-id вовсе, но circuit_id
+        -- в этом случае самоописываемый текстовый формат (s=..;p=..;o=..;v=..) -
+        -- тип парсера тут однозначен и без похода в db, в отличие от остальных
+        -- вендоров (там определение по длине убрано - см. parseTypeByUnknownDevice
+        -- в истории этого файла, не подтвердилось трафиком). Подтверждено сверкой
+        -- через tools/pcapreplay: без этой ветки реджектились 30/31
+        -- сессий, которые прод реально принимает
+        parseType = "zte"
+    else
         log.warning("authorize: mac=" .. macAbon .. " mac_sw=<UNKNOWN> reject: no remote_id")
         return { reject = "no remote_id: circuit_id=" .. circuitId }
     end
 
-    local device = db:getDeviceByMac(macSw)
-    if not device then
-        log.warning("authorize: mac=" .. macAbon .. " mac_sw=" .. macSw .. " reject: device not found")
-        return { reject = "device not found: mac_sw=" .. macSw }
-    end
-
-    local vlan, stack, port = circuitReader(circuitId, device.parse_type)
+    local vlan, stack, port = circuitReader(circuitId, parseType)
 
     log.debug("authorize: mac=" .. macAbon .. " mac_sw=" .. macSw ..
-        " parse_type=" .. tostring(device.parse_type) .. " vlan=" .. tostring(vlan) .. " port=" .. tostring(port))
+        " parse_type=" .. tostring(parseType) .. " vlan=" .. tostring(vlan) .. " port=" .. tostring(port))
 
-    if not vlan then
-        log.warning("authorize: mac=" .. macAbon .. " mac_sw=" .. macSw .. " parse_type=" .. tostring(device.parse_type) .. " reject: circuit_id parse failed")
+    -- vlan=0 - тоже "не распарсилось": в legacy Perl-скрипте (script.pl:authenticate)
+    -- проверка "if(!$vlan)" ловит и undef, и 0 (в Perl 0 - falsy), а Lua 0 - truthy,
+    -- поэтому голым "if not vlan" эта ветка не отлавливалась - подтверждено сверкой
+    -- через tools/pcapreplay на реальном трафике: vlan=0 из circuit_id всегда даёт
+    -- Access-Reject на проде, мы же ошибочно выдавали Accept на бессмысленный
+    -- "INET-0-FAKE" пул
+    if not vlan or vlan == 0 then
+        log.warning("authorize: mac=" .. macAbon .. " mac_sw=" .. macSw .. " parse_type=" .. tostring(parseType) .. " vlan=" .. tostring(vlan) .. " reject: circuit_id parse failed")
         return {
-            error = "circuit_id parse failed: mac_sw=" .. macSw .. " parse_type=" .. tostring(device.parse_type) .. " circuit_id=" .. circuitId,
-            extra_attributes = { ["Reply-Message"] = replyMessage(nil, nil, nil, macSw, device.parse_type) },
+            error = "circuit_id parse failed: mac_sw=" .. macSw .. " parse_type=" .. tostring(parseType) .. " circuit_id=" .. circuitId,
+            extra_attributes = { ["Reply-Message"] = replyMessage(vlan, stack, port, macSw, parseType) },
         }
     end
 
-    local rm = replyMessage(vlan, stack, port, macSw, device.parse_type)
+    local rm = replyMessage(vlan, stack, port, macSw, parseType)
     local leaseInet = leaseTime()
 
     local portBinds, flags = getPortBinds(macSw, port)

@@ -22,6 +22,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/meklis/all-ok-radius-server/radius/redback"
+	"github.com/meklis/all-ok-radius-server/radius/redback_agent_parsers"
 	"layeh.com/radius"
 	"layeh.com/radius/rfc2865"
 	"layeh.com/radius/rfc2869"
@@ -60,6 +62,7 @@ func main() {
 	workers := flag.Int("workers", 20, "количество параллельных запросов при прогоне")
 	limit := flag.Int("limit", 0, "ограничить число сопоставленных пар (0 = все)")
 	csvPath := flag.String("out", "", "путь для CSV со всеми результатами (опционально)")
+	portCheckCSVPath := flag.String("port-check-out", "", "путь для CSV со сверкой парсинга circuit_id (vlan/port из Reply-Message реального ответа vs Reply-Message ЭТОГО сервера при прогоне через -target, см. reply_message в auth.lua). Опционально, требует -target/-secret")
 	flag.Parse()
 
 	if *pcapPath == "" {
@@ -101,6 +104,7 @@ func main() {
 	results := replay(pairs, *target, *secret, *timeout, *workers)
 
 	report(results, *csvPath)
+	reportPortCheck(results, *portCheckCSVPath)
 }
 
 // matchPairs сопоставляет Access-Request'ы с ответившими на них Access-Accept/
@@ -184,10 +188,23 @@ func summarize(p *radius.Packet, err error) summary {
 }
 
 type result struct {
-	userName string
-	real     summary
-	got      summary
-	mismatch bool
+	userName  string
+	macSw     string
+	circuitID string
+	real      summary
+	got       summary
+	mismatch  bool
+
+	// сверка парсинга circuit_id по Reply-Message (см. replymessage.go) - не
+	// зависит от IP/пула/bindings, только от того, как каждая сторона прочитала
+	// vlan/port из circuit_id. realRM/gotRM.haveVlan==false - у этой стороны нет
+	// Reply-Message вовсе (например наш ранний reject "no remote_id"/"device not
+	// found" до попытки парсинга, или реальный ответ легаси без Reply-Message)
+	realRM         replyInfo
+	gotRM          replyInfo
+	haveRealRM     bool
+	haveGotRM      bool
+	portRMMismatch bool // сравнивалось (обе стороны имеют Reply-Message) и vlan/port разошлись
 }
 
 // replay прогоняет каждую пару через target: новый пакет с теми же атрибутами
@@ -212,11 +229,32 @@ func replay(pairs []pair, target, secret string, timeout time.Duration, workers 
 
 				realSum := summarize(p.real, nil)
 				gotSum := summarize(resp, err)
+
+				reqPkt := &radius.Packet{Attributes: p.req}
+				realRM, haveRealRM := parseReplyMessage(rfc2865.ReplyMessage_GetString(p.real))
+				var gotRM replyInfo
+				var haveGotRM bool
+				if resp != nil {
+					gotRM, haveGotRM = parseReplyMessage(rfc2865.ReplyMessage_GetString(resp))
+				}
+				portRMMismatch := false
+				if haveRealRM && haveGotRM {
+					portRMMismatch = realRM.vlan != gotRM.vlan || realRM.port != gotRM.port ||
+						realRM.haveVlan != gotRM.haveVlan || realRM.havePort != gotRM.havePort
+				}
+
 				out <- result{
-					userName: rfc2865.UserName_GetString(pkt),
-					real:     realSum,
-					got:      gotSum,
-					mismatch: !realSum.equalIgnoringLease(gotSum),
+					userName:       rfc2865.UserName_GetString(pkt),
+					macSw:          redback_agent_parsers.ParseRemoteId(redback.AgentRemoteID_Get(reqPkt)),
+					circuitID:      fmt.Sprintf("%X", redback.AgentCircuitID_Get(reqPkt)),
+					real:           realSum,
+					got:            gotSum,
+					mismatch:       !realSum.equalIgnoringLease(gotSum),
+					realRM:         realRM,
+					gotRM:          gotRM,
+					haveRealRM:     haveRealRM,
+					haveGotRM:      haveGotRM,
+					portRMMismatch: portRMMismatch,
 				}
 			}
 		}()
@@ -243,6 +281,82 @@ func replay(pairs []pair, target, secret string, timeout time.Duration, workers 
 		}
 	}
 	return results
+}
+
+// reportPortCheck сверяет парсинг circuit_id: vlan/port из Reply-Message
+// реального ответа (дамп) против vlan/port из Reply-Message, которое вернул сам
+// целевой сервер при прогоне (см. result.realRM/gotRM, заполняются в replay()).
+// Никакой отдельной Go-реализации парсинга circuit_id тут нет - "got" получен от
+// РЕАЛЬНОГО сервера/auth.lua, а не reverse-engineered копии (ту разъезжающуюся с
+// auth.lua копию раньше приходилось вручную досинхронизировать - см. историю этого
+// файла). Не зависит от актуальности bindings/IP/пула - сравнивает только то, как
+// каждая сторона прочитала circuit_id
+func reportPortCheck(results []result, csvPath string) {
+	var noRealRM, noGotRM, compared, mismatches int
+	for _, r := range results {
+		if !r.haveRealRM {
+			noRealRM++
+			continue
+		}
+		if !r.haveGotRM {
+			noGotRM++
+			continue
+		}
+		compared++
+		if r.portRMMismatch {
+			mismatches++
+		}
+	}
+
+	fmt.Printf("\nport/vlan check: %d pairs skipped (real ответ без Reply-Message), %d skipped (наш ответ без Reply-Message - ранний reject до попытки парсинга)\n", noRealRM, noGotRM)
+	if compared == 0 {
+		fmt.Println("port/vlan check: nothing to compare")
+		return
+	}
+	fmt.Printf("=== port/vlan: %d/%d matched (%.2f%%), %d mismatches ===\n",
+		compared-mismatches, compared, 100*float64(compared-mismatches)/float64(compared), mismatches)
+
+	shown := 0
+	for _, r := range results {
+		if !r.haveRealRM || !r.haveGotRM || !r.portRMMismatch {
+			continue
+		}
+		if shown < 20 {
+			fmt.Printf("PORT MISMATCH mac=%v mac_sw=%v circuit_id=%v real_parse_type=%v got_parse_type=%v\n  real: vlan=%v port=%v (have=%v/%v)\n  got:  vlan=%v port=%v (have=%v/%v)\n",
+				r.userName, r.macSw, r.circuitID, r.realRM.parseType, r.gotRM.parseType,
+				r.realRM.vlan, r.realRM.port, r.realRM.haveVlan, r.realRM.havePort,
+				r.gotRM.vlan, r.gotRM.port, r.gotRM.haveVlan, r.gotRM.havePort)
+		}
+		shown++
+	}
+	if shown > 20 {
+		fmt.Printf("... and %d more port mismatches (see -port-check-out CSV for the full list)\n", shown-20)
+	}
+
+	if csvPath == "" {
+		return
+	}
+	f, err := os.Create(csvPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "port check: write csv: %v\n", err)
+		return
+	}
+	defer f.Close()
+	w := csv.NewWriter(f)
+	defer w.Flush()
+	w.Write([]string{"mismatch", "user_name", "mac_sw", "circuit_id", "real_parse_type", "got_parse_type",
+		"real_vlan", "real_port", "got_vlan", "got_port"})
+	for _, r := range results {
+		if !r.haveRealRM || !r.haveGotRM {
+			continue
+		}
+		w.Write([]string{
+			fmt.Sprint(r.portRMMismatch), r.userName, r.macSw, r.circuitID, r.realRM.parseType, r.gotRM.parseType,
+			fmt.Sprint(r.realRM.vlan), fmt.Sprint(r.realRM.port),
+			fmt.Sprint(r.gotRM.vlan), fmt.Sprint(r.gotRM.port),
+		})
+	}
+	fmt.Printf("wrote %s\n", csvPath)
 }
 
 func cloneAttrs(src radius.Attributes) radius.Attributes {
