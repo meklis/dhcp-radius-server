@@ -1,0 +1,20 @@
+x-defaults: &defaults
+  restart: always
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "5"
+  env_file:
+    - .env
+
+services:
+  radius-server:
+    <<: *defaults
+    image: ghcr.io/meklis/dhcp-radius-server:${IMAGE_TAG:-latest}
+    container_name: radius-server
+    network_mode: host
+    volumes:
+      # Скрипты из образа (/opt/scripts) перекрываются локальными - редактируйте
+      # файлы в ./scripts, изменения подхватятся при перезапуске контейнера
+      - ./scripts:/opt/scripts
