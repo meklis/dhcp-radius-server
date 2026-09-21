@@ -52,7 +52,7 @@ func (rad *Radius) _handleAuthRequest(w radius.ResponseWriter, r *radius.Request
 	resp, err := rad._handlerProccessApi(req)
 	if err != nil {
 		prom.ErrorsInc(prom.Critical, "radius")
-		rad.lg.CriticalF("error get answer from api's: %v", err.Error())
+		rad.lg.CriticalF("error get answer from processor: client_mac=%v %v", req.DeviceMac, err.Error())
 		rad.lg.DebugF("%v", tracerr.Sprint(err))
 		rad.processor.SendPostAuth(req, events.AuthResponse{
 			Status: "ERROR",
@@ -62,7 +62,7 @@ func (rad *Radius) _handleAuthRequest(w radius.ResponseWriter, r *radius.Request
 		return
 	} else if resp.IpAddress == "" && resp.PoolName == "" {
 		prom.ErrorsInc(prom.Critical, "radius")
-		rad.lg.CriticalF("error get answer from api's: pool_name and ip_address is empty")
+		rad.lg.CriticalF("error get answer from processor: client_mac=%v pool_name and ip_address is empty", req.DeviceMac)
 		rad.processor.SendPostAuth(req, events.AuthResponse{
 			Status: "ERROR",
 			Error:  fmt.Sprintf("%v", err),
@@ -82,7 +82,6 @@ func (rad *Radius) _handleAuthRequest(w radius.ResponseWriter, r *radius.Request
 	}
 
 	resp.Class = classId
-	rad.lg.DebugF("%v %x: response from api - poolName=%v ipAddr=%v leaseTimeSec=%v", r.Code, r.Authenticator, resp.PoolName, resp.IpAddress, resp.LeaseTimeSec)
 	err = rad._respondAuthAccept(*resp, w, r)
 
 	if err != nil {

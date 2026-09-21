@@ -93,10 +93,16 @@ circuitParsers["zte"] = function(circuit)
     return vlan, stack, stack * 100000 + p * 1000 + o
 end
 
--- BDCOM: 5 байт без заголовка - vlan, неиспользуемый байт, stack, port_raw
--- (подтверждено трафиком)
+-- BDCOM: два варианта длины (оба подтверждены трафиком/реальными данными):
+--   10 hex (5 байт) - vlan(2Б), неиспользуемый байт, stack(1Б), port_raw(1Б)
+--   8 hex (4 байта) - vlan(2Б), stack(1Б), port_raw(1Б), без неиспользуемого байта
 circuitParsers["bdcom"] = function(circuit)
-    local vlan, stack, portRaw = hexByte(circuit, 1, 4), hexByte(circuit, 7, 2), hexByte(circuit, 9, 2)
+    local vlan, stack, portRaw
+    if #circuit == 8 then
+        vlan, stack, portRaw = hexByte(circuit, 1, 4), hexByte(circuit, 5, 2), hexByte(circuit, 7, 2)
+    else
+        vlan, stack, portRaw = hexByte(circuit, 1, 4), hexByte(circuit, 7, 2), hexByte(circuit, 9, 2)
+    end
     if not vlan or not stack or not portRaw then
         return nil
     end

@@ -28,9 +28,11 @@ func testDBServer(t *testing.T) *httptest.Server {
 		case "devices":
 			w.Write([]byte("33686018;085A119465E0;dlink\n"))
 			w.Write([]byte("33686018;AABBCCDDEEAA;cdata\n"))
+			w.Write([]byte("33686018;AABBCCDDEE11;bdcom\n"))
 		case "clients":
 			w.Write([]byte(clientsBindsData))
 			w.Write([]byte("5;16909063;112233445577;AABBCCDDEEAA;2005\n"))
+			w.Write([]byte("8;16909065;1122334455AA;AABBCCDDEE11;1\n"))
 		}
 	}))
 }
@@ -163,6 +165,28 @@ func TestEngineWithDBCdataParser(t *testing.T) {
 	}
 	if resp.IpAddress != "1.2.3.7" {
 		t.Errorf("expected ip_address=1.2.3.7, got %+v", resp)
+	}
+}
+
+func TestEngineWithDBBdcomParserShort(t *testing.T) {
+	e := testEngineWithDB(t)
+
+	// bdcom, короткий вариант (4 байта/8 hex, без unused-байта): circuit_id=0A900001 ->
+	// vlan=0x0A90=2704, stack=0, port_raw=1 -> port=1. Подтверждено реальными данными
+	// (vlan_id=2704, slot=0, port=1 из внешней системы учёта интерфейсов)
+	resp, err := e.CallAuthorize(&events.AuthRequest{
+		NasIp:     "10.0.0.1",
+		DeviceMac: "1122334455AA",
+		AgentOption: &events.AuthRequestOption{
+			RemoteId:     "AA:BB:CC:DD:EE:11",
+			RawCircuitId: "0A900001",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallAuthorize: %v", err)
+	}
+	if resp.IpAddress != "1.2.3.9" {
+		t.Errorf("expected ip_address=1.2.3.9, got %+v", resp)
 	}
 }
 
