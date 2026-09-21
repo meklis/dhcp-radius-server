@@ -33,16 +33,13 @@ func (r *AuthRequest) GetHash() string {
 }
 
 type AuthResponse struct {
-	Time         time.Time `json:"-"`
-	IpAddress    string    `json:"ip_address"`
-	PoolName     string    `json:"pool_name"`
-	LeaseTimeSec int       `json:"lease_time_sec"`
-	Status       string    `json:"status"`
-	Error        string    `json:"error"`
-	Class        string    `json:"class_id"`
-	// ExtraAttributes - дополнительные RADIUS-атрибуты в ответ, полное имя
-	// (например "Mikrotik-Address-List") -> значение. Список поддерживаемых
-	// имён см. attrTypes.
+	Time            time.Time         `json:"-"`
+	IpAddress       string            `json:"ip_address"`
+	PoolName        string            `json:"pool_name"`
+	LeaseTimeSec    int               `json:"lease_time_sec"`
+	Status          string            `json:"status"`
+	Error           string            `json:"error"`
+	Class           string            `json:"class_id"`
 	ExtraAttributes map[string]string `json:"extra_attributes"`
 }
 

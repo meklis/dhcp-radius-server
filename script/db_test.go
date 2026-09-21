@@ -304,8 +304,10 @@ func TestEngineWithDBReservedIPIsNotABindOrFlag(t *testing.T) {
 	if resp.PoolName != "INET-101-FAKE" || resp.LeaseTimeSec != 120 {
 		t.Errorf("expected pool_name=INET-101-FAKE lease=120, got %+v", resp)
 	}
-	if len(resp.ExtraAttributes) != 0 {
-		t.Errorf("expected no extra_attributes (no service flag), got %+v", resp.ExtraAttributes)
+	// extra_attributes всегда несёт диагностический Reply-Message (см. auth.lua:
+	// attach()), но не должен содержать Mikrotik-Address-List - тут нет сервисного флага
+	if _, ok := resp.ExtraAttributes["Mikrotik-Address-List"]; ok {
+		t.Errorf("expected no Mikrotik-Address-List (no service flag), got %+v", resp.ExtraAttributes)
 	}
 }
 

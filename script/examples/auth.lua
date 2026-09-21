@@ -19,12 +19,15 @@
 --   lease_time_sec       - время аренды в секундах (Session-Timeout)
 --   extra_attributes     - таблица {["Mikrotik-Address-List"]="...", ...} с
 --                          дополнительными RADIUS-атрибутами в ответ (полное имя ->
---                          значение), список поддерживаемых имён см. attrTypes на
---                          стороне Go
---   error                - остальные поля игнорируются. Значит "этот конкретный запрос
---                          не может быть обслужен" (например не распарсился circuit_id) -
---                          клиенту отправляется явный Access-Reject
---   reject               - остальные поля (включая error) игнорируются. Явное
+--                          значение, включая стандартный "Reply-Message" - см.
+--                          replyMessage()/attach() ниже), список поддерживаемых
+--                          имён см. attrTypes на стороне Go. Единственное поле,
+--                          которое применяется даже вместе с error/reject
+--   error                - ip_address/pool_name/lease_time_sec игнорируются. Значит
+--                          "этот конкретный запрос не может быть обслужен" (например
+--                          не распарсился circuit_id) - клиенту отправляется явный
+--                          Access-Reject
+--   reject               - как error, приоритетнее него, если заданы оба. Явное
 --                          бизнес-решение отказать этому устройству (например
 --                          заблокировано) - клиенту отправляется явный Access-Reject.
 --                          Сейчас нигде не используется - задел под будущие правила
@@ -168,6 +171,29 @@ local function getPortBinds(macSw, port)
     return binds, flags
 end
 
+-- Reply-Message (через extra_attributes, см. attrTypes в radius/extra_attributes) -
+-- диагностическая строка, формат идентичен legacy script.pl (authenticate():
+-- $RAD_REPLY{'Reply-Message'}), чтобы её мог разобрать тот же парсер, что уже
+-- читает Reply-Message прод-сервера (см. tools/pcapreplay) - не влияет на выдачу
+-- IP/пула, только для сверки парсинга circuit_id. Отправляется клиенту на Accept
+-- и на Reject одинаково (см. radius/handler.go)
+local function replyMessage(vlan, stack, port, macSw, parseType)
+    local function s(v)
+        if v == nil then return "" end
+        return tostring(v)
+    end
+    return "vlan=" .. s(vlan) .. ";stack=" .. s(stack) .. ";port=" .. s(port) ..
+        ";macSw=" .. s(macSw) .. ";parse-type=" .. s(parseType)
+end
+
+-- attach добавляет Reply-Message в extra_attributes возвращаемой таблицы, не
+-- затирая уже выставленные там ключи (например Mikrotik-Address-List)
+local function attach(rm, t)
+    t.extra_attributes = t.extra_attributes or {}
+    t.extra_attributes["Reply-Message"] = rm
+    return t
+end
+
 function authorize(request)
     local macAbon = request.device_mac
     local macSw = request.option.remote_id or ""
@@ -193,9 +219,13 @@ function authorize(request)
 
     if not vlan then
         log.warning("authorize: mac=" .. macAbon .. " mac_sw=" .. macSw .. " parse_type=" .. tostring(device.parse_type) .. " reject: circuit_id parse failed")
-        return { error = "circuit_id parse failed: mac_sw=" .. macSw .. " parse_type=" .. tostring(device.parse_type) .. " circuit_id=" .. circuitId }
+        return {
+            error = "circuit_id parse failed: mac_sw=" .. macSw .. " parse_type=" .. tostring(device.parse_type) .. " circuit_id=" .. circuitId,
+            extra_attributes = { ["Reply-Message"] = replyMessage(nil, nil, nil, macSw, device.parse_type) },
+        }
     end
 
+    local rm = replyMessage(vlan, stack, port, macSw, device.parse_type)
     local leaseInet = leaseTime()
 
     local portBinds, flags = getPortBinds(macSw, port)
@@ -215,19 +245,19 @@ function authorize(request)
         end
     end
     if ipAddress then
-        return { ip_address = ipAddress, lease_time_sec = leaseInet }
+        return attach(rm, { ip_address = ipAddress, lease_time_sec = leaseInet })
     end
 
     -- шаг 2: свою привязку не выдали - порт целиком под общим сервисным пулом?
     -- порядок приоритета фиксирован: youtube, потом wifi, потом iptv
     if flags.youtube then
-        return { pool_name = "YOUTUBE-" .. vlan, lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.Youtube" } }
+        return attach(rm, { pool_name = "YOUTUBE-" .. vlan, lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.Youtube" } })
     end
     if flags.wifi then
-        return { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.Wifi" } }
+        return attach(rm, { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.Wifi" } })
     end
     if flags.iptv then
-        return { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.IPTV" } }
+        return attach(rm, { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = leaseInet, extra_attributes = { ["Mikrotik-Address-List"] = "Triolan.IPTV" } })
     end
 
     -- шаг 3: smart-устройство (абонентский wifi-роутер и т.п.) по мак абонента,
@@ -235,12 +265,12 @@ function authorize(request)
     -- неизвестное устройство
     local smart = db:getBind("smart", macAbon)
     if #smart > 0 then
-        return { ip_address = smart[1].ip, lease_time_sec = leaseInet }
+        return attach(rm, { ip_address = smart[1].ip, lease_time_sec = leaseInet })
     end
 
     if macAbon:match("^66:99:") then
-        return { pool_name = "INET-" .. vlan .. "-WIFI", lease_time_sec = TIMEOUT_WIFI }
+        return attach(rm, { pool_name = "INET-" .. vlan .. "-WIFI", lease_time_sec = TIMEOUT_WIFI })
     end
 
-    return { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = TIMEOUT_FAKE }
+    return attach(rm, { pool_name = "INET-" .. vlan .. "-FAKE", lease_time_sec = TIMEOUT_FAKE })
 end

@@ -63,7 +63,7 @@ func (rad *Radius) _handleAuthRequest(w radius.ResponseWriter, r *radius.Request
 		// не связанная с этим устройством -> молчим, см. events.AuthErrorKind
 		kind := events.ClassifyAuthError(err)
 		if kind != events.KindError {
-			if rejErr := rad._respondAuthReject(w, r, classId); rejErr != nil {
+			if rejErr := rad._respondAuthReject(w, r, classId, events.ExtractExtraAttributes(err)); rejErr != nil {
 				rad.lg.ErrorF("error write reject response: %v", rejErr.Error())
 			}
 		}
@@ -78,7 +78,7 @@ func (rad *Radius) _handleAuthRequest(w radius.ResponseWriter, r *radius.Request
 		// запросу (KindInvalid), а не инфраструктурная проблема
 		prom.ErrorsInc(prom.Critical, "radius")
 		rad.lg.CriticalF("error get answer from processor: client_mac=%v pool_name and ip_address is empty", req.DeviceMac)
-		if rejErr := rad._respondAuthReject(w, r, classId); rejErr != nil {
+		if rejErr := rad._respondAuthReject(w, r, classId, resp.ExtraAttributes); rejErr != nil {
 			rad.lg.ErrorF("error write reject response: %v", rejErr.Error())
 		}
 		rad.processor.SendPostAuth(req, events.AuthResponse{
@@ -206,12 +206,18 @@ func (rad *Radius) _parseAccountingRequest(r *radius.Request) (events.AcctReques
 // script.pl:authenticate - RLM_MODULE_INVALID there reliably produces a real
 // Access-Reject, confirmed by replaying a real production capture through this
 // server, see tools/pcapreplay) - restored for the request-specific cases only
-func (rad *Radius) _respondAuthReject(w radius.ResponseWriter, r *radius.Request, classId string) error {
+func (rad *Radius) _respondAuthReject(w radius.ResponseWriter, r *radius.Request, classId string, extraAttrs map[string]string) error {
 	r.Attributes = make(radius.Attributes)
 	if classId != "" {
 		if err := rfc2865.Class_SetString(r.Packet, classId); err != nil {
 			prom.ErrorsInc(prom.Error, "radius")
 			rad.lg.ErrorF("error generate reject response packet with className=%v", classId)
+		}
+	}
+	for name, value := range extraAttrs {
+		if err := extraAttributes.SetString(r.Packet, name, value); err != nil {
+			prom.ErrorsInc(prom.Error, "radius")
+			rad.lg.ErrorF("error set reject response %v=%v: %v", name, value, err)
 		}
 	}
 	r.Code = radius.CodeAccessReject

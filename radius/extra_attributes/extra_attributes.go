@@ -21,12 +21,18 @@ const (
 )
 
 type attrInfo struct {
+	// VendorID - 0 для стандартных (не vendor-specific) атрибутов из RFC2865 и
+	// т.п. - тогда Type кодируется напрямую в пакет, без VSA-обёртки (см. SetString)
 	VendorID uint32
 	Type     byte
 }
 
 // attrTypes - полное имя атрибута -> вендор и тип внутри него. Включены только
 // атрибуты типа string - SetString умеет кодировать только строки.
+//
+// Reply-Message (RFC2865, стандартный атрибут, без вендора) - используется
+// скриптами (см. script/examples/auth.lua) как диагностическая строка, не
+// влияющая на выдачу IP/пула, отправляется клиенту и на Accept, и на Reject.
 //
 // MikroTik (vendor 14988) сверен с официальным dictionary.mikrotik
 // (github.com/FreeRADIUS/freeradius-server/blob/master/share/dictionary/radius/dictionary.mikrotik,
@@ -39,6 +45,8 @@ type attrInfo struct {
 // Redback (vendor 2352) - типы сверены с radius/redback (сгенерированным пакетом
 // с полным словарём Redback), добавлен как пример второго вендора.
 var attrTypes = map[string]attrInfo{
+	"Reply-Message": {0, byte(rfc2865.ReplyMessage_Type)},
+
 	"Mikrotik-Group":                  {vendorMikrotik, 3},
 	"Mikrotik-Wireless-Enc-Key":       {vendorMikrotik, 7},
 	"Mikrotik-Rate-Limit":             {vendorMikrotik, 8},
@@ -73,9 +81,6 @@ func addVendor(p *radius.Packet, vendorID uint32, typ byte, attr radius.Attribut
 	return nil
 }
 
-// SetString добавляет в ответ атрибут name=value. name - полное имя атрибута
-// (например "Mikrotik-Address-List" или "Redback-Context-Name"), должно быть
-// заранее зарегистрировано в attrTypes - вендор определяется по нему автоматически.
 func SetString(p *radius.Packet, name, value string) error {
 	info, ok := attrTypes[name]
 	if !ok {
@@ -84,6 +89,10 @@ func SetString(p *radius.Packet, name, value string) error {
 	a, err := radius.NewString(value)
 	if err != nil {
 		return err
+	}
+	if info.VendorID == 0 {
+		p.Set(radius.Type(info.Type), a)
+		return nil
 	}
 	return addVendor(p, info.VendorID, info.Type, a)
 }

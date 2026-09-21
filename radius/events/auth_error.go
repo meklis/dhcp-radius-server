@@ -34,8 +34,9 @@ const (
 // (INVALID/REJECT) или промолчать (ERROR). Ошибка без такой обёртки (обычный
 // error откуда угодно из стека вызовов) по умолчанию считается KindError.
 type AuthError struct {
-	Kind AuthErrorKind
-	Err  error
+	Kind            AuthErrorKind
+	Err             error
+	ExtraAttributes map[string]string
 }
 
 func (e *AuthError) Error() string { return e.Err.Error() }
@@ -44,15 +45,24 @@ func (e *AuthError) Unwrap() error { return e.Err }
 func NewInvalidError(err error) error { return &AuthError{Kind: KindInvalid, Err: err} }
 func NewRejectError(err error) error  { return &AuthError{Kind: KindReject, Err: err} }
 
-// ClassifyAuthError достаёт AuthErrorKind из ошибки (в т.ч. обёрнутой через
-// fmt.Errorf("...: %w", ...)). Неклассифицированная ошибка (обычный error,
-// не через NewInvalidError/NewRejectError) считается KindError - безопасный
-// дефолт: молчание, а не ошибочный явный отказ устройству, которое ни в чём
-// не виновато.
+func NewInvalidErrorWithAttrs(err error, attrs map[string]string) error {
+	return &AuthError{Kind: KindInvalid, Err: err, ExtraAttributes: attrs}
+}
+func NewRejectErrorWithAttrs(err error, attrs map[string]string) error {
+	return &AuthError{Kind: KindReject, Err: err, ExtraAttributes: attrs}
+}
 func ClassifyAuthError(err error) AuthErrorKind {
 	var ae *AuthError
 	if errors.As(err, &ae) {
 		return ae.Kind
 	}
 	return KindError
+}
+
+func ExtractExtraAttributes(err error) map[string]string {
+	var ae *AuthError
+	if errors.As(err, &ae) {
+		return ae.ExtraAttributes
+	}
+	return nil
 }
