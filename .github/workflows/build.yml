@@ -88,6 +88,9 @@ jobs:
       - name: Set version from tag
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
+      - name: Set build date
+        run: echo "BUILD_DATE=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -108,6 +111,11 @@ jobs:
           file: install/docker/radius/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          # без этого rad_sys_version внутри образа остаётся на дефолте из
+          # исходников (см. server/main.go) - Dockerfile ждёт эти же имена ARG
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
           tags: |
             ghcr.io/${{ github.repository }}:${{ env.VERSION }}
             ghcr.io/${{ github.repository }}:latest

@@ -8,7 +8,13 @@ COPY go.mod go.sum ./
 COPY third_party ./third_party
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/dhcp-radius-server ./server
+# VERSION/BUILD_DATE - те же -X main.VERSION/main.BUILD_DATE, что и в бинарной
+# сборке (.github/workflows/build.yml), пробрасываются через --build-arg оттуда же.
+# Без этого rad_sys_version в /metrics всегда показывал бы зашитый в исходниках
+# дефолт независимо от того, какой тег реально собран
+ARG VERSION=dev
+ARG BUILD_DATE=unknown
+RUN CGO_ENABLED=0 go build -ldflags "-X main.VERSION=${VERSION} -X main.BUILD_DATE=${BUILD_DATE}" -o /out/dhcp-radius-server ./server
 
 FROM alpine:3.20
 LABEL maintainer="Max Boyar <max.boyar.a@gmail.com>"
