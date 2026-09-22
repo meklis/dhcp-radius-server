@@ -123,7 +123,7 @@ func (p *Processor) SendAcct(acct *events.AcctRequest) {
 func (p *Processor) acctWorker() {
 	for acct := range p.acctChannel {
 		if err := p.acctEngine.CallAccounting(acct); err != nil {
-			prom.ErrorsInc(prom.Error, "script")
+			prom.ErrorsInc(acct.NasIp, prom.Error, "accounting_script_error")
 			p.lg.ErrorF("script accounting returned err: %v", err)
 		}
 	}
@@ -132,7 +132,7 @@ func (p *Processor) acctWorker() {
 func (p *Processor) postAuthWorker() {
 	for ev := range p.postAuthChannel {
 		if err := p.postAuthEngine.CallPostAuth(&ev.req, &ev.resp); err != nil {
-			prom.ErrorsInc(prom.Error, "script")
+			prom.ErrorsInc(ev.req.NasIp, prom.Error, "post_auth_script_error")
 			p.lg.ErrorF("script post_auth returned err: %v", err)
 		}
 	}

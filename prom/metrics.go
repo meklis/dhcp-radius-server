@@ -10,6 +10,26 @@ var (
 		Name: "rad_request_count",
 		Help: "Count of requests from NAS",
 	}, []string{"host"})
+	// radRequestDuration - от получения Access-Request до записи ответа (Accept/
+	// Reject) или до решения промолчать на инфраструктурной ошибке (KindError, см.
+	// radius/events/auth_error.go) - в обоих случаях это всё время, которое NAS
+	// реально ждёт до таймаута/ответа. Бакеты подобраны под типичный профиль
+	// latency этого сервера (единицы-десятки мс, см. doc/LOAD_TESTING.md), с
+	// запасом до SCRIPT_TIMEOUT
+	radRequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "rad_request_duration_seconds",
+		Help:    "Time from receiving an Access-Request to writing the response (or to the decision to stay silent on an infrastructure error)",
+		Buckets: []float64{.001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2, 3, 5},
+	}, []string{"host"})
+	// radRequestDurationTotal - то же самое значение, что уходит в radRequestDuration,
+	// но отдельным простым Counter'ом (rad_request_duration_seconds_bucket/_sum/_count
+	// от Histogram для этого не годятся напрямую как обычный счётчик - это его
+	// внутренние служебные серии). rate(rad_request_duration_seconds_total[5m]) /
+	// rate(rad_request_count[5m]) - средняя latency без histogram_quantile
+	radRequestDurationTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "rad_request_duration_seconds_total",
+		Help: "Cumulative time spent processing Access-Requests, in seconds, by NAS host",
+	}, []string{"host"})
 	radAcctRequests = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "rad_acct_requests_count",
 		Help: "rad acct requests count",
@@ -26,18 +46,17 @@ var (
 		Name: "rad_request_by_pool_count",
 		Help: "Count of requests from NAS by pool name",
 	}, []string{"host", "pool_name"})
-	radCriticalCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "rad_critical_count",
-		Help: "Errors stat",
-	}, []string{"caller"})
-	radWarningsCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "rad_warnings_count",
-		Help: "Errors stat",
-	}, []string{"caller"})
-	radErrorsCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "rad_errors_count",
-		Help: "Errors stat",
-	}, []string{"caller"})
+	// radErrors - единый счётчик ошибок/предупреждений вместо трёх раздельных
+	// (rad_critical_count/rad_errors_count/rad_warnings_count) - level и msg как
+	// лейблы вместо трёх серий с одинаковой формой. msg - короткая фиксированная
+	// причина (константа на месте вызова, не интерполированный текст ошибки/мак -
+	// иначе кардинальность лейбла не ограничена), host - NAS, приславший запрос,
+	// если применимо ("" для ошибок, не привязанных к конкретному NAS, например
+	// API/скрипт-воркеры без запроса под рукой)
+	radErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "rad_errors",
+		Help: "Count of errors/warnings, by NAS host, severity level (CRITICAL/ERROR/WARNING) and short reason",
+	}, []string{"host", "level", "msg"})
 	cacheSize = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "rad_cache_responses_count",
 		Help: "Count of responses in cache",
@@ -100,22 +119,26 @@ const Critical ErrLevel = 1
 const Error ErrLevel = 2
 const Warning ErrLevel = 3
 
-func ErrorsInc(level ErrLevel, caller string) {
+// ErrorsInc - host: NAS, приславший запрос, к которому относится ошибка ("" если
+// не привязана к конкретному запросу/NAS). msg: короткая фиксированная причина
+// (константа на месте вызова - не текст ошибки/мак-адрес, иначе кардинальность
+// лейбла станет неограниченной)
+func ErrorsInc(host string, level ErrLevel, msg string) {
 	if !PromEnabled {
 		return
 	}
-	var pr *prometheus.CounterVec
+	var levelStr string
 	switch level {
 	case Critical:
-		pr = radCriticalCount
+		levelStr = "CRITICAL"
 	case Error:
-		pr = radErrorsCount
+		levelStr = "ERROR"
 	case Warning:
-		pr = radWarningsCount
+		levelStr = "WARNING"
 	default:
 		return
 	}
-	pr.With(map[string]string{"caller": caller}).Inc()
+	radErrors.With(map[string]string{"host": host, "level": levelStr, "msg": msg}).Inc()
 }
 
 func RadRequestsInc(host string) {
@@ -123,6 +146,14 @@ func RadRequestsInc(host string) {
 		return
 	}
 	radRequests.With(map[string]string{"host": host}).Inc()
+}
+
+func ObserveRequestDuration(host string, seconds float64) {
+	if !PromEnabled {
+		return
+	}
+	radRequestDuration.With(map[string]string{"host": host}).Observe(seconds)
+	radRequestDurationTotal.With(map[string]string{"host": host}).Add(seconds)
 }
 
 func RadRequestsIpAddressInc(host string) {

@@ -12,23 +12,28 @@ groups:
           summary: "RADIUS-сервер не отримує запитів"
           description: "За останні 5 хвилин немає жодного запиту (rad_request_count). Можлива причина - процес не піднявся, порт не слухається, або NAS/свитчі не можуть достукатись до сервера."
 
+      # rad_errors{host,level,msg} - єдиний лічильник замість трьох (rad_critical_count/
+      # rad_errors_count/rad_warnings_count), level - CRITICAL/ERROR/WARNING (див.
+      # prom.ErrorsInc). WARNING - очікувані бізнес-рішення (наприклад Access-Reject
+      # на no remote_id/circuit_id parse failed - це нормальна робота скрипта, не
+      # помилка сервера) і навмисно не має тут алерта - сповіщення лише по CRITICAL/ERROR
       - alert: RadiusCriticalErrorsHigh
-        expr: sum(rate(rad_critical_count[5m])) * 60 > 5
+        expr: sum(rate(rad_errors{level="CRITICAL"}[5m])) * 60 > 5
         for: 5m
         labels:
           severity: critical
         annotations:
           summary: "Високий рівень critical-помилок RADIUS ({{ $value | printf \"%.1f\" }}/хв)"
-          description: "rad_critical_count росте швидше 5/хв протягом 5 хвилин. Дивись лог рівня CRITICAL (error get answer from processor / circuit_id parse failed / unknown request type тощо)."
+          description: "rad_errors{level=\"CRITICAL\"} росте швидше 5/хв протягом 5 хвилин - інфраструктурна проблема (processor_error/write_response_failed/parse_request_failed), не бізнес-reject. Дивись лог рівня CRITICAL."
 
       - alert: RadiusErrorsElevated
-        expr: sum(rate(rad_errors_count[5m])) * 60 > 20
+        expr: sum(rate(rad_errors{level="ERROR"}[5m])) * 60 > 20
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "Підвищений рівень помилок RADIUS ({{ $value | printf \"%.1f\" }}/хв)"
-          description: "rad_errors_count вище норми протягом 10 хвилин - можлива деградація (наприклад помилки формування відповіді)."
+          description: "rad_errors{level=\"ERROR\"} вище норми протягом 10 хвилин - можлива деградація (наприклад помилки формування відповіді - accept_*_encode_failed/reject_*_encode_failed)."
 
       - alert: RadiusNoSuccessfulResponses
         expr: sum(rate(rad_request_ip_count[5m])) + sum(rate(rad_request_pool_count[5m])) == 0 and sum(rate(rad_request_count[5m])) > 0

@@ -57,12 +57,12 @@ func Init(conf ApiConfig, lg *logger.Logger) *Api {
 					for _, addr := range conf.PostAuth.Addresses {
 						response, err := htReq.Post(addr, req.BodyJSON(auth))
 						if err != nil {
-							prom.ErrorsInc(prom.Error, "api")
+							prom.ErrorsInc(auth.Request.NasIp, prom.Error, "post_auth_send_failed")
 							lg.ErrorF("post auth report returned err from addr %v: %v", addr, tracerr.Sprint(err))
 							continue
 						}
 						if response.Response().StatusCode != 200 {
-							prom.ErrorsInc(prom.Error, "api")
+							prom.ErrorsInc(auth.Request.NasIp, prom.Error, "post_auth_bad_status")
 							lg.ErrorF("post auth report returned err from addr %v: %v", addr, tracerr.Sprint(err))
 							continue
 						}
@@ -92,12 +92,12 @@ func Init(conf ApiConfig, lg *logger.Logger) *Api {
 					for _, addr := range conf.Acct.Addresses {
 						response, err := htReq.Post(addr, req.BodyJSON(acct))
 						if err != nil {
-							prom.ErrorsInc(prom.Error, "api")
+							prom.ErrorsInc(acct.NasIp, prom.Error, "acct_send_failed")
 							lg.ErrorF("acct report returned err from addr %v: %v", addr, tracerr.Sprint(err))
 							continue
 						}
 						if response.Response().StatusCode != 200 {
-							prom.ErrorsInc(prom.Error, "api")
+							prom.ErrorsInc(acct.NasIp, prom.Error, "acct_bad_status")
 							lg.ErrorF("acct report returned err from addr %v: %v", addr, tracerr.Sprint(err))
 							continue
 						}
@@ -140,7 +140,7 @@ func (a *Api) Get(req *events.AuthRequest) (*events.AuthResponse, error) {
 
 	apiResp, err := a._getFromApi(req)
 	if err != nil && exist {
-		prom.ErrorsInc(prom.Error, "api")
+		prom.ErrorsInc(req.NasIp, prom.Error, "api_get_failed_using_stale_cache")
 		a.lg.ErrorF("error get data from api: %v", tracerr.Sprint(err))
 		return response, nil
 	} else if err != nil {
@@ -195,13 +195,13 @@ func (a *Api) _getFromApi(request *events.AuthRequest) (*events.AuthResponse, er
 	req.SetTimeout(a.Conf.Timeout)
 	response, err := req.Post(source.Address, req.BodyJSON(request))
 	if err != nil {
-		prom.ErrorsInc(prom.Error, "api")
+		prom.ErrorsInc(request.NasIp, prom.Error, "api_request_failed")
 		a.lg.ErrorF("source returned err: %v", tracerr.Sprint(err))
 		a.sources.Disable(source.Address)
 		return nil, tracerr.Wrap(err)
 	}
 	if response.Response().StatusCode != 200 {
-		prom.ErrorsInc(prom.Error, "api")
+		prom.ErrorsInc(request.NasIp, prom.Error, "api_bad_status")
 		a.lg.ErrorF("source returned http != 200: %v %v", response.Response().StatusCode, response.Response().Status)
 		a.sources.Disable(source.Address)
 		return nil, tracerr.New(fmt.Sprintf("http err: %v - %v", response.Response().StatusCode, response.Response().Status))

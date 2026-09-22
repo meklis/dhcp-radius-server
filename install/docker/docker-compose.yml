@@ -18,3 +18,9 @@ services:
       dockerfile: install/docker/radius/Dockerfile
     container_name: radius-server
     network_mode: host
+    volumes:
+      # Время/часовой пояс контейнера = время хоста (влияет не только на логи, но
+      # и на auth.lua:leaseTime() - лиз считается до ближайших 6 утра по локальному
+      # времени контейнера)
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro

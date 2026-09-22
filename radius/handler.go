@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/meklis/all-ok-radius-server/macaddr"
 	"github.com/meklis/all-ok-radius-server/prom"
@@ -37,12 +38,22 @@ func (rad *Radius) _handlerProccessApi(request events.AuthRequest) (*events.Auth
 	return resp, nil
 }
 func (rad *Radius) _handleAuthRequest(w radius.ResponseWriter, r *radius.Request) {
+	// от получения запроса до конца обработки (записи ответа или решения
+	// промолчать) - именно столько реально ждёт NAS. Мерим независимо от того,
+	// как разбор пакета в дальнейшем разрешится (см. rfc2865.NASIPAddress_Get
+	// вместо req.NasIp - тот доступен только после успешного _parseAuthRequest)
+	start := time.Now()
+	nasIp := rfc2865.NASIPAddress_Get(r.Packet).String()
+	defer func() {
+		prom.ObserveRequestDuration(nasIp, time.Since(start).Seconds())
+	}()
+
 	classId := rad.getClassId()
 	req, err := rad._parseAuthRequest(r)
 	if err != nil {
 		// разбор самого RADIUS-пакета - инфраструктурная проблема (KindError), а не
 		// решение по конкретному устройству: молчим, NAS переспросит
-		prom.ErrorsInc(prom.Critical, "radius")
+		prom.ErrorsInc(nasIp, prom.Critical, "parse_request_failed")
 		rad.lg.Criticalf("response from radius-server: %v", err.Error())
 		rad.processor.SendPostAuth(req, events.AuthResponse{
 			Status: string(events.KindError),
@@ -54,19 +65,23 @@ func (rad *Radius) _handleAuthRequest(w radius.ResponseWriter, r *radius.Request
 	req.Class = classId
 	resp, err := rad._handlerProccessApi(req)
 	if err != nil {
-		prom.ErrorsInc(prom.Critical, "radius")
-		rad.lg.CriticalF("error get answer from processor: client_mac=%v %v", req.DeviceMac, err.Error())
-		rad.lg.DebugF("%v", tracerr.Sprint(err))
 		// KindInvalid/KindReject - скрипт/api приняли решение об этом конкретном
-		// запросе (не распарсился circuit_id, явный бизнес-отказ) -> Access-Reject.
+		// запросе (не распарсился circuit_id, явный бизнес-отказ) -> Access-Reject,
+		// это ожидаемое поведение, не ошибка сервера - WARNING, не CRITICAL.
 		// KindError (в т.ч. любая необёрнутая ошибка) - инфраструктурная проблема,
 		// не связанная с этим устройством -> молчим, см. events.AuthErrorKind
 		kind := events.ClassifyAuthError(err)
-		if kind != events.KindError {
+		if kind == events.KindError {
+			prom.ErrorsInc(nasIp, prom.Critical, "processor_error")
+			rad.lg.CriticalF("error get answer from processor: client_mac=%v %v", req.DeviceMac, err.Error())
+		} else {
+			prom.ErrorsInc(nasIp, prom.Warning, "auth_rejected")
+			rad.lg.WarningF("request rejected: client_mac=%v %v", req.DeviceMac, err.Error())
 			if rejErr := rad._respondAuthReject(w, r, classId, events.ExtractExtraAttributes(err)); rejErr != nil {
 				rad.lg.ErrorF("error write reject response: %v", rejErr.Error())
 			}
 		}
+		rad.lg.DebugF("%v", tracerr.Sprint(err))
 		rad.processor.SendPostAuth(req, events.AuthResponse{
 			Status: string(kind),
 			Error:  fmt.Sprintf("%v", err),
@@ -75,9 +90,9 @@ func (rad *Radius) _handleAuthRequest(w radius.ResponseWriter, r *radius.Request
 		return
 	} else if resp.IpAddress == "" && resp.PoolName == "" {
 		// ответ структурно получен, но обслужить нечем - это решение по конкретному
-		// запросу (KindInvalid), а не инфраструктурная проблема
-		prom.ErrorsInc(prom.Critical, "radius")
-		rad.lg.CriticalF("error get answer from processor: client_mac=%v pool_name and ip_address is empty", req.DeviceMac)
+		// запросу (KindInvalid), а не инфраструктурная проблема - WARNING
+		prom.ErrorsInc(nasIp, prom.Warning, "empty_response")
+		rad.lg.WarningF("processor returned empty ip_address and pool_name: client_mac=%v", req.DeviceMac)
 		if rejErr := rad._respondAuthReject(w, r, classId, resp.ExtraAttributes); rejErr != nil {
 			rad.lg.ErrorF("error write reject response: %v", rejErr.Error())
 		}
@@ -111,7 +126,7 @@ func (rad *Radius) _handleAuthRequest(w radius.ResponseWriter, r *radius.Request
 			Error:  fmt.Sprintf("%v", err),
 			Class:  classId,
 		})
-		prom.ErrorsInc(prom.Critical, "radius")
+		prom.ErrorsInc(nasIp, prom.Critical, "write_response_failed")
 		rad.lg.CriticalF("error write response: %v", err.Error())
 		rad.lg.DebugF("%v", tracerr.Sprint(err))
 		return
@@ -207,16 +222,17 @@ func (rad *Radius) _parseAccountingRequest(r *radius.Request) (events.AcctReques
 // Access-Reject, confirmed by replaying a real production capture through this
 // server, see tools/pcapreplay) - restored for the request-specific cases only
 func (rad *Radius) _respondAuthReject(w radius.ResponseWriter, r *radius.Request, classId string, extraAttrs map[string]string) error {
+	nasIp := rfc2865.NASIPAddress_Get(r.Packet).String()
 	r.Attributes = make(radius.Attributes)
 	if classId != "" {
 		if err := rfc2865.Class_SetString(r.Packet, classId); err != nil {
-			prom.ErrorsInc(prom.Error, "radius")
+			prom.ErrorsInc(nasIp, prom.Error, "reject_class_encode_failed")
 			rad.lg.ErrorF("error generate reject response packet with className=%v", classId)
 		}
 	}
 	for name, value := range extraAttrs {
 		if err := extraAttributes.SetString(r.Packet, name, value); err != nil {
-			prom.ErrorsInc(prom.Error, "radius")
+			prom.ErrorsInc(nasIp, prom.Error, "reject_attr_encode_failed")
 			rad.lg.ErrorF("error set reject response %v=%v: %v", name, value, err)
 		}
 	}
@@ -229,10 +245,11 @@ func (rad *Radius) _respondAuthReject(w radius.ResponseWriter, r *radius.Request
 }
 
 func (rad *Radius) _respondAuthAccept(response events.AuthResponse, w radius.ResponseWriter, r *radius.Request) error {
+	nasIp := rfc2865.NASIPAddress_Get(r.Packet).String()
 	r.Attributes = make(radius.Attributes)
 	if response.Class != "" {
 		if err := rfc2865.Class_SetString(r.Packet, response.Class); err != nil {
-			prom.ErrorsInc(prom.Error, "radius")
+			prom.ErrorsInc(nasIp, prom.Error, "accept_class_encode_failed")
 			rad.lg.ErrorF("error generate response packet for pool with className=%v", response.Class)
 		}
 	}
@@ -240,29 +257,29 @@ func (rad *Radius) _respondAuthAccept(response events.AuthResponse, w radius.Res
 	switch response.GetRadiusResponseType() {
 	case events.SetPool:
 		if err := rfc2869.FramedPool_Set(r.Packet, []byte(response.PoolName)); err != nil {
-			prom.ErrorsInc(prom.Error, "radius")
+			prom.ErrorsInc(nasIp, prom.Error, "accept_pool_encode_failed")
 			rad.lg.ErrorF("error generate response packet for pool with poolName=%v", response.PoolName)
 		}
 	case events.SetIpAddress:
 		if err := rfc2865.FramedIPAddress_Set(r.Packet, response.GetIp()); err != nil {
-			prom.ErrorsInc(prom.Error, "radius")
+			prom.ErrorsInc(nasIp, prom.Error, "accept_ip_encode_failed")
 			rad.lg.ErrorF("error generate response packet for ip=%v", response.IpAddress)
 		}
 	default:
 		rad.lg.ErrorF("unknown type of response set with id: %v", response.GetRadiusResponseType())
-		prom.ErrorsInc(prom.Error, "radius")
+		prom.ErrorsInc(nasIp, prom.Error, "accept_unknown_response_type")
 		return errors.New(fmt.Sprintf("unknown type of response set with id: %v", response.GetRadiusResponseType()))
 	}
 
 	if response.LeaseTimeSec != 0 {
 		if err := rfc2865.SessionTimeout_Set(r.Packet, rfc2865.SessionTimeout(response.LeaseTimeSec)); err != nil {
-			prom.ErrorsInc(prom.Error, "radius")
+			prom.ErrorsInc(nasIp, prom.Error, "accept_session_timeout_encode_failed")
 			rad.lg.ErrorF("error set response SessionTimeOut=%v", response.LeaseTimeSec)
 		}
 	}
 	for name, value := range response.ExtraAttributes {
 		if err := extraAttributes.SetString(r.Packet, name, value); err != nil {
-			prom.ErrorsInc(prom.Error, "radius")
+			prom.ErrorsInc(nasIp, prom.Error, "accept_attr_encode_failed")
 			rad.lg.ErrorF("error set response %v=%v: %v", name, value, err)
 		}
 	}
