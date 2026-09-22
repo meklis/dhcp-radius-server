@@ -91,6 +91,7 @@ func (s *Store) applyBindEventNow(ev BindEvent) error {
 	switch ev.Action {
 	case "delete":
 		existed := idx.deleteByID(id)
+		prom.SetClientDBBindsCount(ev.DBType, idx.Count())
 		s.lg.NoticeF("clientdb: live-update: binds.%v id=%v deleted (existed=%v)", ev.DBType, id, existed)
 		return nil
 	case "add", "update":
@@ -108,6 +109,7 @@ func (s *Store) applyBindEventNow(ev BindEvent) error {
 			b.Port, _ = strconv.Atoi(string(ev.Object.Port))
 		}
 		existed := idx.upsert(b)
+		prom.SetClientDBBindsCount(ev.DBType, idx.Count())
 		s.lg.NoticeF("clientdb: live-update: binds.%v id=%v %v (existed=%v): ip=%v mac=%v device_mac=%v port=%v",
 			ev.DBType, id, ev.Action, existed, b.IP, b.ClientMac, b.DeviceMac, b.Port)
 		return nil

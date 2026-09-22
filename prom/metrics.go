@@ -235,6 +235,15 @@ func SetClientDBSize(devices int, binds map[string]int) {
 	}
 }
 
+// SetClientDBBindsCount - обновление размера одного bind-источника после
+// точечного live-update (см. clientdb.ApplyBindEvent), без полного reload
+func SetClientDBBindsCount(source string, count int) {
+	if !PromEnabled {
+		return
+	}
+	clientDBBindsCount.WithLabelValues(source).Set(float64(count))
+}
+
 func SetClientDBLastReload(unixSeconds int64) {
 	if !PromEnabled {
 		return
