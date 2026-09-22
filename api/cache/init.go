@@ -1,8 +1,8 @@
 package cache
 
 import (
-	"github.com/meklis/all-ok-radius-server/prom"
-	"github.com/meklis/all-ok-radius-server/radius/events"
+	"github.com/meklis/dhcp-radius-server/prom"
+	"github.com/meklis/dhcp-radius-server/radius/events"
 	"github.com/meklis/go-cache"
 	"time"
 )

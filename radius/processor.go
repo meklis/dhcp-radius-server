@@ -1,6 +1,6 @@
 package radius
 
-import "github.com/meklis/all-ok-radius-server/radius/events"
+import "github.com/meklis/dhcp-radius-server/radius/events"
 
 // Processor - бэкенд обработки radius-запросов. Реализуется либо пакетом api
 // (HTTP), либо пакетом script (встроенный Lua) - radius ничего не знает про

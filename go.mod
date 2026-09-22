@@ -1,4 +1,4 @@
-module github.com/meklis/all-ok-radius-server
+module github.com/meklis/dhcp-radius-server
 
 go 1.24
 

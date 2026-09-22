@@ -1,4 +1,4 @@
-### Запуск all-ok-radius в docker за допомогою docker-compose    
+### Запуск dhcp-radius-server в docker за допомогою docker-compose    
 
 0. Встановіть docker і docker-compose 
 1. Скопіюйте вміст цього каталогу на кінцеву машину

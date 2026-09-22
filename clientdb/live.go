@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/meklis/all-ok-radius-server/macaddr"
-	"github.com/meklis/all-ok-radius-server/prom"
+	"github.com/meklis/dhcp-radius-server/macaddr"
+	"github.com/meklis/dhcp-radius-server/prom"
 )
 
 // BindEvent - точечное изменение одной записи в bind-источнике (см. Config.Binds),

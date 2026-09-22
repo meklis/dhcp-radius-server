@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/meklis/all-ok-radius-server/logger"
-	"github.com/meklis/all-ok-radius-server/macaddr"
-	"github.com/meklis/all-ok-radius-server/prom"
+	"github.com/meklis/dhcp-radius-server/logger"
+	"github.com/meklis/dhcp-radius-server/macaddr"
+	"github.com/meklis/dhcp-radius-server/prom"
 )
 
 // Config - параметры загрузки внешней базы устройств и привязок.

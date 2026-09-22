@@ -1,7 +1,7 @@
 package api
 
 import (
-	"github.com/meklis/all-ok-radius-server/radius/events"
+	"github.com/meklis/dhcp-radius-server/radius/events"
 	"time"
 )
 

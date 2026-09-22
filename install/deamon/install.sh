@@ -28,7 +28,11 @@ if  [ $STATUS_BIN -eq 0 ] && [ $STATUS_CONF -eq 0 ]
 then
   echo "Success download! Install..."
   echo "Check status of service"
-  systemctl status all-ok-radius && systemctl stop all-ok-radius && rm /usr/local/bin/dhcp-radius-server
+  # all-ok-radius - старое имя юнита/репозитория (до переименования в
+  # dhcp-radius-server) - останавливаем его тоже, если апгрейдимся со
+  # старой установки; новый юнит ставится под именем dhcp-radius-server ниже
+  systemctl status all-ok-radius && systemctl stop all-ok-radius
+  systemctl status dhcp-radius-server && systemctl stop dhcp-radius-server && rm /usr/local/bin/dhcp-radius-server
   mv /tmp/dhcp-radius-server /usr/local/bin/dhcp-radius-server
   chmod +x /usr/local/bin/dhcp-radius-server
 else
@@ -52,14 +56,14 @@ LimitNOFILE=128000
 ExecStart=/usr/local/bin/dhcp-radius-server -c /etc/dhcp-radius-server/radis.server.conf.yml
 [Install]
 WantedBy=multi-user.target
-" > /etc/systemd/system/all-ok-radius.service
+" > /etc/systemd/system/dhcp-radius-server.service
 
-systemctl enable all-ok-radius
+systemctl enable dhcp-radius-server
 
 echo "Installation finished!"
 echo "Service not started automaticaly"
 echo "Command for get service status:"
-echo "    systemctl status all-ok-radius"
+echo "    systemctl status dhcp-radius-server"
 echo ""
 echo "Command for start service:"
-echo "    systemctl start all-ok-radius"
+echo "    systemctl start dhcp-radius-server"

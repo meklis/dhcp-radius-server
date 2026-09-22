@@ -7,9 +7,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/meklis/all-ok-radius-server/clientdb"
-	"github.com/meklis/all-ok-radius-server/logger"
-	"github.com/meklis/all-ok-radius-server/radius/events"
+	"github.com/meklis/dhcp-radius-server/clientdb"
+	"github.com/meklis/dhcp-radius-server/logger"
+	"github.com/meklis/dhcp-radius-server/radius/events"
 	lua "github.com/yuin/gopher-lua"
 	"github.com/yuin/gopher-lua/parse"
 )

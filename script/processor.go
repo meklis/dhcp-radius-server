@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/meklis/all-ok-radius-server/clientdb"
-	"github.com/meklis/all-ok-radius-server/logger"
-	"github.com/meklis/all-ok-radius-server/prom"
-	"github.com/meklis/all-ok-radius-server/radius/events"
+	"github.com/meklis/dhcp-radius-server/clientdb"
+	"github.com/meklis/dhcp-radius-server/logger"
+	"github.com/meklis/dhcp-radius-server/prom"
+	"github.com/meklis/dhcp-radius-server/radius/events"
 )
 
 // Config - путь к своему lua-скрипту на каждый метод (auth обязателен, acct/post_auth опциональны).

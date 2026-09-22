@@ -7,12 +7,12 @@ import (
 	"net/http/pprof"
 	"strings"
 
-	"github.com/meklis/all-ok-radius-server/api"
-	"github.com/meklis/all-ok-radius-server/config"
-	"github.com/meklis/all-ok-radius-server/logger"
-	"github.com/meklis/all-ok-radius-server/prom"
-	"github.com/meklis/all-ok-radius-server/radius"
-	"github.com/meklis/all-ok-radius-server/script"
+	"github.com/meklis/dhcp-radius-server/api"
+	"github.com/meklis/dhcp-radius-server/config"
+	"github.com/meklis/dhcp-radius-server/logger"
+	"github.com/meklis/dhcp-radius-server/prom"
+	"github.com/meklis/dhcp-radius-server/radius"
+	"github.com/meklis/dhcp-radius-server/script"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/ztrue/tracerr"
 )

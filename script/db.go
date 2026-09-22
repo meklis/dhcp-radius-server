@@ -1,7 +1,7 @@
 package script
 
 import (
-	"github.com/meklis/all-ok-radius-server/clientdb"
+	"github.com/meklis/dhcp-radius-server/clientdb"
 	lua "github.com/yuin/gopher-lua"
 )
 

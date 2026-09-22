@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/meklis/all-ok-radius-server/logger"
+	"github.com/meklis/dhcp-radius-server/logger"
 	"layeh.com/radius"
 )
 

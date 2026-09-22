@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/meklis/all-ok-radius-server/prom"
+	"github.com/meklis/dhcp-radius-server/prom"
 	redis "github.com/redis/go-redis/v9"
 )
 

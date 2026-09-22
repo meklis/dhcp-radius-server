@@ -22,8 +22,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/meklis/all-ok-radius-server/radius/redback"
-	"github.com/meklis/all-ok-radius-server/radius/redback_agent_parsers"
+	"github.com/meklis/dhcp-radius-server/radius/redback"
+	"github.com/meklis/dhcp-radius-server/radius/redback_agent_parsers"
 	"layeh.com/radius"
 	"layeh.com/radius/rfc2865"
 	"layeh.com/radius/rfc2869"

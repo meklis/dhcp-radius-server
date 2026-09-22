@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/meklis/all-ok-radius-server/clientdb"
-	"github.com/meklis/all-ok-radius-server/radius/events"
+	"github.com/meklis/dhcp-radius-server/clientdb"
+	"github.com/meklis/dhcp-radius-server/radius/events"
 )
 
 // clients: реальная привязка (744D280EE846) на порту 3; порт 6 отдан под IPTV (2.2.2.2)

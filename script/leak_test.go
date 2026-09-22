@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/meklis/all-ok-radius-server/radius/events"
+	"github.com/meklis/dhcp-radius-server/radius/events"
 )
 
 func TestEngineNoLeak(t *testing.T) {

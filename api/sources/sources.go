@@ -1,8 +1,8 @@
 package sources
 
 import (
-	"github.com/meklis/all-ok-radius-server/logger"
-	"github.com/meklis/all-ok-radius-server/prom"
+	"github.com/meklis/dhcp-radius-server/logger"
+	"github.com/meklis/dhcp-radius-server/prom"
 	"github.com/ztrue/tracerr"
 	"sort"
 	"sync"

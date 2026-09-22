@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/meklis/all-ok-radius-server/logger"
+	"github.com/meklis/dhcp-radius-server/logger"
 )
 
 // clients - формат id;ip;client_mac;device_mac;port

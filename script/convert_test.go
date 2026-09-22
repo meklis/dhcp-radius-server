@@ -3,7 +3,7 @@ package script
 import (
 	"testing"
 
-	"github.com/meklis/all-ok-radius-server/radius/events"
+	"github.com/meklis/dhcp-radius-server/radius/events"
 	lua "github.com/yuin/gopher-lua"
 )
 

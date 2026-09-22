@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/meklis/all-ok-radius-server/api"
-	"github.com/meklis/all-ok-radius-server/logger"
-	"github.com/meklis/all-ok-radius-server/script"
+	"github.com/meklis/dhcp-radius-server/api"
+	"github.com/meklis/dhcp-radius-server/logger"
+	"github.com/meklis/dhcp-radius-server/script"
 	"gopkg.in/yaml.v2"
 )
 
