@@ -123,7 +123,7 @@ func TestReloadClearsStaleRecords(t *testing.T) {
 		case "devices":
 			w.Write([]byte(devices))
 		case "clients", "smart":
-			w.Write([]byte(""))
+			w.Write([]byte(clientsSample))
 		}
 	}))
 	defer srv.Close()
@@ -138,13 +138,81 @@ func TestReloadClearsStaleRecords(t *testing.T) {
 		t.Fatal("expected device to be present before reload")
 	}
 
-	devices = "" // источник больше не отдаёт эту запись
+	// источник больше не отдаёт эту конкретную запись, но остаётся непустым -
+	// полностью пустой источник теперь отдельно отклоняется, см.
+	// TestReloadRejectsEmptyDevices/TestReloadRejectsEmptyBinds
+	devices = "33686018;085A11946600;dlink\n"
 	if err := s.reload(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
 
 	if _, ok := s.GetDeviceByMac("085A119465E0"); ok {
 		t.Error("stale record was not cleared after reload")
+	}
+	if _, ok := s.GetDeviceByMac("085A11946600"); !ok {
+		t.Error("expected remaining device to still be present")
+	}
+}
+
+// TestReloadRejectsEmptyDevices - HTTP 200 с пустым телом (например, баг на
+// стороне источника) не должен молча заменить рабочий снапшот пустым - reload
+// должен провалиться, а старые данные - продолжать обслуживать запросы
+func TestReloadRejectsEmptyDevices(t *testing.T) {
+	devices := devicesSample
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("type") {
+		case "devices":
+			w.Write([]byte(devices))
+		case "clients", "smart":
+			w.Write([]byte(clientsSample))
+		}
+	}))
+	defer srv.Close()
+
+	s, err := New(testConfig(srv.URL), testLogger(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	devices = ""
+	if err := s.reload(); err == nil {
+		t.Fatal("expected reload to fail on empty devices response")
+	}
+
+	if _, ok := s.GetDeviceByMac("085A119465E0"); !ok {
+		t.Error("expected old snapshot to still serve requests after a rejected reload")
+	}
+}
+
+// TestReloadRejectsEmptyBinds - тот же случай, но для одного из binds-источников
+func TestReloadRejectsEmptyBinds(t *testing.T) {
+	clients := clientsSample
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("type") {
+		case "devices":
+			w.Write([]byte(devicesSample))
+		case "clients":
+			w.Write([]byte(clients))
+		case "smart":
+			w.Write([]byte(smartSample))
+		}
+	}))
+	defer srv.Close()
+
+	s, err := New(testConfig(srv.URL), testLogger(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	clients = ""
+	if err := s.reload(); err == nil {
+		t.Fatal("expected reload to fail on empty binds.clients response")
+	}
+
+	if binds := s.GetBind("clients", "", "085A119465E0", "3"); len(binds) == 0 {
+		t.Error("expected old snapshot to still serve requests after a rejected reload")
 	}
 }
 

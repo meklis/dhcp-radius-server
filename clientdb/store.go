@@ -267,12 +267,24 @@ func (s *Store) reload() error {
 	if err != nil {
 		return fmt.Errorf("devices: %w", err)
 	}
+	// HTTP 200 с пустым/урезанным телом (например, баг на стороне источника)
+	// не даёт scanner.Err() - без этой проверки reload() ниже безусловно
+	// заменил бы текущий рабочий снапшот пустым, и db:getDeviceByMac начал бы
+	// отвечать "не найдено" абсолютно всем - реджект всех абонентов до
+	// следующего удачного reload. Старый снапшот в этом случае просто
+	// продолжает обслуживать запросы (см. defer finishReload)
+	if len(devices) == 0 {
+		return fmt.Errorf("devices: got 0 devices from %v - refusing to replace a possibly-healthy snapshot with an empty one", s.conf.DevicesURL)
+	}
 
 	binds := make(map[string]*bindIndex, len(s.conf.Binds))
 	for name, url := range s.conf.Binds {
 		idx, err := s.loadBindDB(url)
 		if err != nil {
 			return fmt.Errorf("binds.%v: %w", name, err)
+		}
+		if idx.Count() == 0 {
+			return fmt.Errorf("binds.%v: got 0 binds from %v - refusing to replace a possibly-healthy snapshot with an empty one", name, url)
 		}
 		binds[name] = idx
 	}
