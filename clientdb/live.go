@@ -1,6 +1,7 @@
 package clientdb
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -8,24 +9,24 @@ import (
 
 	"github.com/meklis/dhcp-radius-server/macaddr"
 	"github.com/meklis/dhcp-radius-server/prom"
+	redis "github.com/redis/go-redis/v9"
 )
 
-// BindEvent - точечное изменение одной записи в bind-источнике (см. Config.Binds),
-// приходит через Redis pub/sub в дополнение к периодическому полному reload по HTTP.
-// В отличие от reload, применяется без перезагрузки всего источника - патчит по
-// месту только запись с данным id, остальные записи не затрагиваются.
+// RedisConfig enables live bind updates (see BindEvent). Empty Addr disables them.
+type RedisConfig struct {
+	Addr     string `yaml:"addr"`
+	Password string `yaml:"password"`
+	DB       int    `yaml:"db"`
+	Channel  string `yaml:"channel"`
+}
+
+// BindEvent is a single-record change published to Redis by the external system:
 //
-// Формат сообщения (JSON) задан внешней системой:
+//	{"db_type":"clients","action":"delete","object":{"id":123}}
+//	{"db_type":"clients","action":"add","object":{"id":123,"ip":16909060,"mac":"AABBCCDDEEFF","device_mac":"AABBCCDDEEFF","port":44}}
 //
-//	{"db_type":"binds","action":"delete","object":{"id":123}}
-//	{"db_type":"binds","action":"add","object":{"id":123,"ip":16909060,"mac":"AABBCCDDEEFF","device_mac":"AABBCCDDEEFF","port":44}}
-//	{"db_type":"binds","action":"update","object":{"id":123,"ip":16909060,"mac":"AABBCCDDEEFF","device_mac":"AABBCCDDEEFF","port":44}}
-//
-// db_type должен совпадать с одним из ключей Config.Binds (например "clients"/"smart",
-// или один ключ "binds", если у источника только одно имя). device_mac/port опциональны -
-// их отсутствие/пустое значение означает запись без привязки к устройству/порту (как у
-// "smart" в HTTP-источнике). "add" и "update" оба означают upsert по object.id: если
-// запись с таким id уже есть - заменяется целиком, если нет - создаётся.
+// db_type is a key of Config.Binds. "add" and "update" both upsert by id;
+// device_mac and port are optional.
 type BindEvent struct {
 	DBType string          `json:"db_type"`
 	Action string          `json:"action"`
@@ -40,49 +41,103 @@ type BindEventObject struct {
 	Port      json.Number `json:"port"`
 }
 
-// handleRedisMessage - точка входа для сообщений из Redis pub/sub (см. subscribeRedis).
-func (s *Store) handleRedisMessage(payload string) {
-	s.lg.DebugF("clientdb: live-update: received message from redis: %v", payload)
-	prom.SetClientDBLiveUpdateLastTimestamp(time.Now().Unix())
-	var ev BindEvent
-	if err := json.Unmarshal([]byte(payload), &ev); err != nil {
-		s.lg.ErrorF("clientdb: live-update: invalid json from redis: %v", err)
-		prom.IncClientDBLiveUpdateError("")
-		return
-	}
-	prom.IncClientDBLiveUpdateReceived(ev.DBType)
-	if err := s.ApplyBindEvent(ev); err != nil {
-		s.lg.ErrorF("clientdb: live-update: %v", err)
-		prom.IncClientDBLiveUpdateError(ev.DBType)
-	}
-}
-
-// ApplyBindEvent применяет точечное изменение (см. BindEvent), не затрагивая
-// остальные записи и не запуская полный reload. Если в этот момент выполняется
-// reload() (от начала HTTP-запроса к источнику до фактической подмены снапшота) -
-// событие не применяется сразу, а откладывается (см. Store.pendingLive) и
-// накатывается на актуальный снапшот сразу после reload (см. finishReload) - иначе
-// оно применилось бы к снапшоту, который через мгновение целиком заменят, и было
-// бы потеряно. Вне окна reload применяется немедленно, как и раньше.
-func (s *Store) ApplyBindEvent(ev BindEvent) error {
-	s.liveMu.Lock()
-	if s.reloading {
-		s.pendingLive = append(s.pendingLive, ev)
-		s.liveMu.Unlock()
+func (s *Store) subscribeRedis() error {
+	conf := s.conf.Redis
+	if conf.Addr == "" {
 		return nil
 	}
-	s.liveMu.Unlock()
-	return s.applyBindEventNow(ev)
+	if conf.Channel == "" {
+		return fmt.Errorf("redis.channel not set")
+	}
+
+	client := redis.NewClient(&redis.Options{
+		Addr:     conf.Addr,
+		Password: conf.Password,
+		DB:       conf.DB,
+	})
+	ctx := context.Background()
+	sub := client.Subscribe(ctx, conf.Channel)
+	if _, err := sub.Receive(ctx); err != nil {
+		sub.Close()
+		client.Close()
+		prom.SetClientDBRedisConnected(false)
+		return fmt.Errorf("subscribe %q: %w", conf.Channel, err)
+	}
+	prom.SetClientDBRedisConnected(true)
+
+	go func() {
+		defer client.Close()
+		defer sub.Close()
+		defer prom.SetClientDBRedisConnected(false)
+		messages := sub.Channel()
+		for {
+			select {
+			case <-s.stop:
+				return
+			case msg, ok := <-messages:
+				if !ok {
+					return
+				}
+				s.lg.DebugF("clientdb: live-update: received message from redis: %v", msg.Payload)
+				prom.SetClientDBLastLiveUpdate(time.Now().Unix())
+				var ev BindEvent
+				if err := json.Unmarshal([]byte(msg.Payload), &ev); err != nil {
+					s.lg.ErrorF("clientdb: live-update: invalid json from redis: %v", err)
+					prom.IncClientDBLiveUpdateError("")
+					continue
+				}
+				prom.IncClientDBLiveUpdate(ev.DBType)
+				if err := s.ApplyBindEvent(ev); err != nil {
+					s.lg.ErrorF("clientdb: live-update: %v", err)
+					prom.IncClientDBLiveUpdateError(ev.DBType)
+				}
+			}
+		}
+	}()
+
+	// go-redis silently reconnects the subscription and does not expose its
+	// state, so connection health is tracked with pings
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.stop:
+				return
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				err := client.Ping(ctx).Err()
+				cancel()
+				prom.SetClientDBRedisConnected(err == nil)
+				if err != nil {
+					s.lg.WarningF("clientdb: redis ping failed: %v", err)
+				}
+			}
+		}
+	}()
+
+	s.lg.NoticeF("clientdb: subscribed to point binds updates via redis %v channel %q", conf.Addr, conf.Channel)
+	return nil
 }
 
-// applyBindEventNow - собственно применение события к текущему снапшоту (см.
-// ApplyBindEvent про откладывание на время reload).
-func (s *Store) applyBindEventNow(ev BindEvent) error {
-	idx, ok := s.currentSnapshot().binds[ev.DBType]
+// ApplyBindEvent patches a single bind. During a reload the event is queued
+// and applied once the new snapshot is published.
+func (s *Store) ApplyBindEvent(ev BindEvent) error {
+	s.pendingMu.Lock()
+	if s.reloading {
+		s.pending = append(s.pending, ev)
+		s.pendingMu.Unlock()
+		return nil
+	}
+	s.pendingMu.Unlock()
+	return s.applyBindEvent(ev)
+}
+
+func (s *Store) applyBindEvent(ev BindEvent) error {
+	idx, ok := s.current().binds[ev.DBType]
 	if !ok {
 		return fmt.Errorf("live-update for non-existent source binds.%v", ev.DBType)
 	}
-
 	id := string(ev.Object.ID)
 	if id == "" {
 		return fmt.Errorf("live-update: object.id not set (binds.%v)", ev.DBType)
@@ -90,8 +145,11 @@ func (s *Store) applyBindEventNow(ev BindEvent) error {
 
 	switch ev.Action {
 	case "delete":
-		existed := idx.deleteByID(id)
-		prom.SetClientDBBindsCount(ev.DBType, idx.Count())
+		idx.mu.Lock()
+		existed := idx.remove(id)
+		count := len(idx.byID)
+		idx.mu.Unlock()
+		prom.SetClientDBBinds(ev.DBType, count)
 		s.lg.NoticeF("clientdb: live-update: binds.%v id=%v deleted (existed=%v)", ev.DBType, id, existed)
 		return nil
 	case "add", "update":
@@ -108,8 +166,11 @@ func (s *Store) applyBindEventNow(ev BindEvent) error {
 			b.DeviceMac = deviceMac
 			b.Port, _ = strconv.Atoi(string(ev.Object.Port))
 		}
-		existed := idx.upsert(b)
-		prom.SetClientDBBindsCount(ev.DBType, idx.Count())
+		idx.mu.Lock()
+		existed := idx.put(b)
+		count := len(idx.byID)
+		idx.mu.Unlock()
+		prom.SetClientDBBinds(ev.DBType, count)
 		s.lg.NoticeF("clientdb: live-update: binds.%v id=%v %v (existed=%v): ip=%v mac=%v device_mac=%v port=%v",
 			ev.DBType, id, ev.Action, existed, b.IP, b.ClientMac, b.DeviceMac, b.Port)
 		return nil

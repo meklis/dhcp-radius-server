@@ -1,138 +1,73 @@
 package radius
 
 import (
-	"fmt"
-	"log"
 	"net"
-	"os"
 	"runtime"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/meklis/dhcp-radius-server/logger"
+	"github.com/meklis/dhcp-radius-server/radius/events"
 	"layeh.com/radius"
 )
 
-type Radius struct {
-	lg             *logger.Logger
-	listenAddr     string
-	secret         string
-	readers        int
-	readBufferSize int
-	processor      Processor
-	classId        int64
-	sync.Mutex
+// Processor is the request backend: HTTP (package api) or Lua (package script).
+type Processor interface {
+	Get(req *events.AuthRequest) (*events.AuthResponse, error)
+	SendPostAuth(req events.AuthRequest, resp events.AuthResponse)
+	SendAcct(acct *events.AcctRequest)
 }
 
-func Init() *Radius {
-	rad := new(Radius)
-	rad.listenAddr = "0.0.0.0:1812"
-	rad.secret = "secret"
-	rad.readers = defaultReaders()
-	rad.lg, _ = logger.New("radius", 0, os.Stdout)
-	rad.classId = time.Now().Unix()
-	return rad
+type Config struct {
+	ListenAddr string `yaml:"listen_addr"`
+	Secret     string `yaml:"secret"`
+	// ReadBufferSize is SO_RCVBUF in bytes, 0 keeps the system default.
+	ReadBufferSize int `yaml:"read_buffer_size"`
 }
 
-// defaultReaders - число горутин-читателей UDP-сокета по умолчанию:
-// NumCPU/2, но не больше 4 и не меньше 1. Больше одного ридера убирает
-// узкое место однопоточного приёма (см. third_party/layeh-radius/README-FORK.md),
-// но дальше упор уже в GC/аллокации при разборе атрибутов и вызове Lua, а не
-// в скорость приёма - раздувать число ридеров вслед за числом ядер смысла нет.
-func defaultReaders() int {
-	n := runtime.NumCPU() / 2
-	if n > 4 {
-		n = 4
-	}
-	if n < 1 {
-		n = 1
-	}
-	return n
+type Server struct {
+	processor Processor
+	lg        *logger.Logger
+	classID   atomic.Int64
 }
 
-func (rad *Radius) getClassId() string {
-	rad.Lock()
-	defer rad.Unlock()
-	rad.classId = rad.classId + 1
-	return fmt.Sprintf("%v", rad.classId)
-}
+func ListenAndServe(conf Config, processor Processor, lg *logger.Logger) error {
+	s := &Server{processor: processor, lg: lg}
+	s.classID.Store(time.Now().Unix())
 
-func (rad *Radius) SetLogger(lg *logger.Logger) *Radius {
-	rad.lg = lg
-	return rad
-}
-func (rad *Radius) SetListenAddr(listenAddr string) *Radius {
-	rad.listenAddr = listenAddr
-	return rad
-}
-func (rad *Radius) SetSecret(secret string) *Radius {
-	rad.secret = secret
-	return rad
-}
-
-// SetReadBufferSize - размер SO_RCVBUF в байтах. 0 - системный default.
-func (rad *Radius) SetReadBufferSize(n int) *Radius {
-	rad.readBufferSize = n
-	return rad
-}
-
-func (rad *Radius) SetProcessor(p Processor) *Radius {
-	rad.processor = p
-	return rad
-}
-
-func (rad *Radius) ListenAndServe() error {
+	// More than a few readers does not help: the bottleneck moves to attribute
+	// parsing and script execution.
+	readers := min(max(runtime.NumCPU()/2, 1), 4)
 	server := radius.PacketServer{
-		Addr:           rad.listenAddr,
+		Addr:           conf.ListenAddr,
 		Network:        "udp",
-		SecretSource:   radius.StaticSecretSource([]byte(rad.secret)),
-		Handler:        radius.HandlerFunc(rad.handler),
-		NumReaders:     rad.readers,
-		ReadBufferSize: rad.readBufferSize,
+		SecretSource:   radius.StaticSecretSource([]byte(conf.Secret)),
+		Handler:        radius.HandlerFunc(s.serve),
+		NumReaders:     readers,
+		ReadBufferSize: conf.ReadBufferSize,
 	}
+	lg.NoticeF("radius readers=%v read_buffer_size=%v", readers, conf.ReadBufferSize)
 
-	rad.lg.NoticeF("radius readers=%v read_buffer_size=%v", rad.readers, rad.readBufferSize)
-	rad.logListenAddr()
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatal(err)
-		return err
-	}
-	return nil
-}
-
-// logListenAddr пишет порт и интерфейс(ы), на которых слушает радиус.
-// Для 0.0.0.0/:: - перечисляет реальные адреса всех сетевых интерфейсов
-func (rad *Radius) logListenAddr() {
-	host, port, err := net.SplitHostPort(rad.listenAddr)
-	if err != nil {
-		rad.lg.InfoF("Starting radius server on %v", rad.listenAddr)
-		return
-	}
-
-	if host != "" && host != "0.0.0.0" && host != "::" {
-		rad.lg.InfoF("Starting radius server: interface=%v port=%v", host, port)
-		return
-	}
-
-	rad.lg.InfoF("Starting radius server: interface=%v (all) port=%v", host, port)
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return
-	}
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, addr := range addrs {
-			ipNet, ok := addr.(*net.IPNet)
-			if !ok || ipNet.IP.IsLinkLocalUnicast() {
+	host, port, err := net.SplitHostPort(conf.ListenAddr)
+	switch {
+	case err != nil:
+		lg.InfoF("Starting radius server on %v", conf.ListenAddr)
+	case host != "" && host != "0.0.0.0" && host != "::":
+		lg.InfoF("Starting radius server: interface=%v port=%v", host, port)
+	default:
+		lg.InfoF("Starting radius server: interface=%v (all) port=%v", host, port)
+		ifaces, _ := net.Interfaces()
+		for _, iface := range ifaces {
+			if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 				continue
 			}
-			rad.lg.InfoF("  interface %v: %v", iface.Name, addr.String())
+			addrs, _ := iface.Addrs()
+			for _, addr := range addrs {
+				if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLinkLocalUnicast() {
+					lg.InfoF("  interface %v: %v", iface.Name, addr)
+				}
+			}
 		}
 	}
+	return server.ListenAndServe()
 }

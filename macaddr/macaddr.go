@@ -1,24 +1,25 @@
-// Package macaddr - единый формат представления мак-адреса для всего проекта:
-// 12 hex-цифр в верхнем регистре через двоеточие (AA:BB:CC:DD:EE:FF). Мак-адреса
-// приходят в разных видах в зависимости от источника (сырой User-Name от NAS,
-// client_mac из внешней clientdb, remote_id из option82) - вендоры свитчей и
-// внешние системы форматируют их по-разному (с разделителями/без, "-"/":", регистр).
-// Normalize приводит любой из этих видов к одному каноническому - это позволяет
-// сравнивать мак-адреса как обычные строки (в т.ч. в lua-скриптах) без отдельной
-// нормализации на месте сравнения.
+// Package macaddr keeps one MAC format across the project: AA:BB:CC:DD:EE:FF,
+// so MACs from NAS, clientdb and option 82 compare as plain strings.
 package macaddr
 
-import "strings"
+import (
+	"encoding/hex"
+	"strings"
+)
 
-// Normalize приводит мак-адрес к каноническому виду AA:BB:CC:DD:EE:FF. Пустая
-// строка остаётся пустой. Если после отбрасывания разделителей осталось не ровно
-// 12 hex-символов (не похоже на 6-байтный мак) - возвращается verbatim hex без
-// двоеточий: битые данные остаются видимыми в логах, а не пропадают и не роняют
-// обработку.
+// Normalize returns AA:BB:CC:DD:EE:FF. Input that does not hold exactly 12 hex
+// digits is returned as bare upper-case hex, so broken data stays visible in logs.
 func Normalize(mac string) string {
-	hex := stripNonHex(mac)
-	if len(hex) != 12 {
-		return hex
+	var digits strings.Builder
+	digits.Grow(len(mac))
+	for _, r := range strings.ToUpper(mac) {
+		if (r >= '0' && r <= '9') || (r >= 'A' && r <= 'F') {
+			digits.WriteRune(r)
+		}
+	}
+	hexStr := digits.String()
+	if len(hexStr) != 12 {
+		return hexStr
 	}
 	var b strings.Builder
 	b.Grow(17)
@@ -26,19 +27,25 @@ func Normalize(mac string) string {
 		if i > 0 {
 			b.WriteByte(':')
 		}
-		b.WriteString(hex[i : i+2])
+		b.WriteString(hexStr[i : i+2])
 	}
 	return b.String()
 }
 
-func stripNonHex(s string) string {
-	s = strings.ToUpper(s)
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		if (r >= '0' && r <= '9') || (r >= 'A' && r <= 'F') {
-			b.WriteRune(r)
+// FromRemoteID extracts the switch MAC from the DHCP option 82 remote-id.
+// Ported from remoteReader() in the legacy abills.pl with offsets shifted by one
+// byte (FreeRADIUS passed hex there, we get raw bytes). Some NAS send the MAC
+// as text; the 18-byte form carries trailing garbage after the MAC.
+func FromRemoteID(remoteID []byte) string {
+	switch len(remoteID) {
+	case 17:
+		if mac := Normalize(string(remoteID)); mac == strings.ToUpper(string(remoteID)) {
+			return mac
 		}
+	case 8:
+		return Normalize(hex.EncodeToString(remoteID[2:8]))
+	case 6, 18:
+		return Normalize(hex.EncodeToString(remoteID[0:6]))
 	}
-	return b.String()
+	return ""
 }

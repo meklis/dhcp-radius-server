@@ -28,11 +28,7 @@ const devicesSample = `33686018;085A119465E0;dlink
 
 func testLogger(t *testing.T) *logger.Logger {
 	t.Helper()
-	lg, err := logger.New("test", 0, os.Stdout)
-	if err != nil {
-		t.Fatalf("logger.New: %v", err)
-	}
-	return lg
+	return logger.New(os.Stdout, logger.Options{Level: logger.InfoLevel})
 }
 
 func testServer(t *testing.T, devices, clients, smart string) *httptest.Server {
@@ -84,34 +80,34 @@ func TestNewAndLookups(t *testing.T) {
 	}
 
 	// smart - поиск только по мак клиента (устройство/порт в этом источнике отсутствуют)
-	binds := s.GetBind("smart", "744D280EE846", "", "")
+	binds := s.FindBinds("smart", "744D280EE846", "", "")
 	if len(binds) != 1 || binds[0].IP.String() != "2.2.2.2" {
 		t.Errorf("unexpected smart binds: %+v", binds)
 	}
 
 	// clients - несколько записей под одним мак клиента (разные устройства/порты)
-	binds = s.GetBind("clients", "AABBCCDDEEFF", "", "")
+	binds = s.FindBinds("clients", "AABBCCDDEEFF", "", "")
 	if len(binds) != 2 {
 		t.Fatalf("expected 2 binds for shared mac, got %v: %+v", len(binds), binds)
 	}
 
 	// уточнение мак устройства + портом сужает до одной записи
-	binds = s.GetBind("clients", "AA:BB:CC:DD:EE:FF", "085a119465e0", "6")
+	binds = s.FindBinds("clients", "AA:BB:CC:DD:EE:FF", "085a119465e0", "6")
 	if len(binds) != 1 || binds[0].Port != 6 {
 		t.Errorf("unexpected bind by mac+device+port: %+v", binds)
 	}
 
 	// несуществующий порт не должен найтись при уточнении
-	if binds := s.GetBind("clients", "744D280EE846", "085A119465E0", "99"); len(binds) != 0 {
+	if binds := s.FindBinds("clients", "744D280EE846", "085A119465E0", "99"); len(binds) != 0 {
 		t.Errorf("expected no binds for wrong port, got %+v", binds)
 	}
 
 	// неизвестное имя базы - пустой результат, не паника
-	if binds := s.GetBind("unknown-db", "744D280EE846", "", ""); len(binds) != 0 {
+	if binds := s.FindBinds("unknown-db", "744D280EE846", "", ""); len(binds) != 0 {
 		t.Errorf("expected empty result for unknown db, got %+v", binds)
 	}
 
-	if binds := s.GetBind("clients", "unknown-mac", "", ""); len(binds) != 0 {
+	if binds := s.FindBinds("clients", "unknown-mac", "", ""); len(binds) != 0 {
 		t.Errorf("expected empty result for unknown mac, got %+v", binds)
 	}
 }
@@ -211,7 +207,7 @@ func TestReloadRejectsEmptyBinds(t *testing.T) {
 		t.Fatal("expected reload to fail on empty binds.clients response")
 	}
 
-	if binds := s.GetBind("clients", "", "085A119465E0", "3"); len(binds) == 0 {
+	if _, ok := s.GetBindByID("clients", "1"); !ok {
 		t.Error("expected old snapshot to still serve requests after a rejected reload")
 	}
 }
@@ -240,7 +236,7 @@ func TestApplyBindEventUpsertAndDelete(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ApplyBindEvent add: %v", err)
 	}
-	binds := s.GetBind("smart", "AA11BB22CC33", "", "")
+	binds := s.FindBinds("smart", "AA11BB22CC33", "", "")
 	if len(binds) != 1 || binds[0].IP.String() == "" {
 		t.Fatalf("new record not visible after add: %+v", binds)
 	}
@@ -257,16 +253,16 @@ func TestApplyBindEventUpsertAndDelete(t *testing.T) {
 		t.Fatalf("ApplyBindEvent update: %v", err)
 	}
 	// старый порт больше не находится
-	if binds := s.GetBind("clients", "744D280EE846", "085A119465E0", "3"); len(binds) != 0 {
+	if binds := s.FindBinds("clients", "744D280EE846", "085A119465E0", "3"); len(binds) != 0 {
 		t.Errorf("old port still indexed after update: %+v", binds)
 	}
 	// новый порт находится
-	binds = s.GetBind("clients", "744D280EE846", "085A119465E0", "42")
+	binds = s.FindBinds("clients", "744D280EE846", "085A119465E0", "42")
 	if len(binds) != 1 || binds[0].Port != 42 {
 		t.Errorf("updated record not found by new port: %+v", binds)
 	}
 	// byDevicePort (поиск без мак клиента) тоже видит обновление
-	binds = s.GetBind("clients", "", "085A119465E0", "42")
+	binds = s.FindBinds("clients", "", "085A119465E0", "42")
 	if len(binds) != 1 {
 		t.Errorf("byDevicePort not updated: %+v", binds)
 	}
@@ -275,11 +271,11 @@ func TestApplyBindEventUpsertAndDelete(t *testing.T) {
 	if err := s.ApplyBindEvent(BindEvent{DBType: "clients", Action: "delete", Object: BindEventObject{ID: "2"}}); err != nil {
 		t.Fatalf("ApplyBindEvent delete: %v", err)
 	}
-	if binds := s.GetBind("clients", "AABBCCDDEEFF", "085A119465E0", "6"); len(binds) != 0 {
+	if binds := s.FindBinds("clients", "AABBCCDDEEFF", "085A119465E0", "6"); len(binds) != 0 {
 		t.Errorf("expected record id=2 to be gone after delete: %+v", binds)
 	}
 	// сосед по тому же мак-адресу (id=3) должен остаться нетронутым
-	if binds := s.GetBind("clients", "AABBCCDDEEFF", "085A119465E0", "7"); len(binds) != 1 {
+	if binds := s.FindBinds("clients", "AABBCCDDEEFF", "085A119465E0", "7"); len(binds) != 1 {
 		t.Errorf("expected sibling record id=3 to survive delete: %+v", binds)
 	}
 	if _, ok := s.GetBindByID("clients", "2"); ok {
@@ -365,7 +361,7 @@ func TestLiveUpdateDuringReloadIsBufferedAndReplayed(t *testing.T) {
 	reloadDone := make(chan error, 1)
 	go func() { reloadDone <- s.reload() }()
 
-	<-started // reload сейчас внутри loadBindDB("clients") - s.reloading уже true
+	<-started // reload сейчас внутри loadBinds("clients") - s.reloading уже true
 
 	if err := s.ApplyBindEvent(BindEvent{
 		DBType: "clients",

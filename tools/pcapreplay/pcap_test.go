@@ -23,8 +23,8 @@ func buildEthIPUDP(t *testing.T, srcMAC, dstMAC [6]byte, srcIP, dstIP net.IP, sr
 	ip := make([]byte, 20+len(udp))
 	ip[0] = 0x45 // version 4, IHL 5
 	binary.BigEndian.PutUint16(ip[2:4], uint16(len(ip)))
-	ip[8] = 64   // TTL
-	ip[9] = 17   // UDP
+	ip[8] = 64 // TTL
+	ip[9] = 17 // UDP
 	copy(ip[12:16], srcIP.To4())
 	copy(ip[16:20], dstIP.To4())
 	copy(ip[20:], udp)

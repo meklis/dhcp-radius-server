@@ -1,8 +1,8 @@
-package redback_agent_parsers
+package macaddr
 
 import "testing"
 
-func TestParseRemoteId(t *testing.T) {
+func TestFromRemoteID(t *testing.T) {
 	cases := []struct {
 		name  string
 		input []byte
@@ -45,8 +45,8 @@ func TestParseRemoteId(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := ParseRemoteId(c.input); got != c.want {
-				t.Errorf("ParseRemoteId(%v) = %q, want %q", c.input, got, c.want)
+			if got := FromRemoteID(c.input); got != c.want {
+				t.Errorf("FromRemoteID(%v) = %q, want %q", c.input, got, c.want)
 			}
 		})
 	}

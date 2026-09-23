@@ -32,9 +32,9 @@ func bindsCountMetric(t *testing.T, source string) float64 {
 }
 
 func TestLiveUpdateRefreshesBindsCountMetric(t *testing.T) {
-	prev := prom.PromEnabled
-	prom.PromEnabled = true
-	defer func() { prom.PromEnabled = prev }()
+	prev := prom.Enabled
+	prom.Enabled = true
+	defer func() { prom.Enabled = prev }()
 
 	srv := testServer(t, devicesSample, clientsSample, smartSample)
 	defer srv.Close()

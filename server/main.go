@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
-	"net/http/pprof"
+	_ "net/http/pprof"
+	"os"
 	"strings"
 
 	"github.com/meklis/dhcp-radius-server/api"
@@ -14,91 +16,71 @@ import (
 	"github.com/meklis/dhcp-radius-server/radius"
 	"github.com/meklis/dhcp-radius-server/script"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/ztrue/tracerr"
 )
 
-var (
-	Config     config.Configuration
-	pathConfig string
-	lg         *logger.Logger
-)
-
+// set at build time via -ldflags "-X main.VERSION=... -X main.BUILD_DATE=..."
 var (
 	VERSION    = "0.2.12"
 	BUILD_DATE = "2024-08-18"
 )
 
-func init() {
-	flag.StringVar(&pathConfig, "c", "radius.server.conf.yml", "Configuration file for radius-server")
-	flag.Parse()
-}
-
 func main() {
-	fmt.Println("Initialize radius-server  ...")
+	configPath := flag.String("c", "radius.server.conf.yml", "Configuration file for radius-server")
+	flag.Parse()
 
-	//Load configuration
-	if err := config.LoadConfig(pathConfig, &Config); err != nil {
+	fmt.Println("Initialize radius-server  ...")
+	conf, err := config.Load(*configPath)
+	if err != nil {
 		panic(err)
 	}
-	//Configure logger from cronfiguration
-	lg = config.ConfigureLogger(&Config)
+	fmt.Printf("Loaded configuration from %v\n", *configPath)
 
-	//Initialize prometheus
-	if Config.Prometheus.Enabled {
-		prom.PromEnabled = true
-		prom.PromDetailedMacInfoEnabled = Config.Prometheus.Detailed
-		lg.NoticeF("Exporter for prometheus is enabled...")
-		http.Handle(Config.Prometheus.Path, promhttp.Handler())
-		go func() {
-			err := http.ListenAndServe(fmt.Sprintf(":%v", Config.Prometheus.Port), nil)
-			lg.CriticalF("Prometheus exporter critical err: %v", err)
-			panic(err)
-		}()
-		lg.NoticeF("Prometheus exporter started on 0.0.0.0:%v%v", Config.Prometheus.Port, Config.Prometheus.Path)
-		prom.SysInfo(VERSION, BUILD_DATE)
+	var out io.Writer = io.Discard
+	if conf.Logger.Console.Enabled {
+		out = os.Stdout
 	}
-	//Configure pprof
-	if Config.Profiler.Enabled {
+	lg := logger.New(out, logger.Options{
+		Level:     logger.Level(conf.Logger.Console.LogLevel),
+		Color:     conf.Logger.Console.EnableColor,
+		PrintFile: conf.Logger.Console.PrintFile,
+	})
+
+	if conf.Prometheus.Enabled {
+		prom.Enabled = true
+		prom.DetailedEnabled = conf.Prometheus.Detailed
+		prom.SetVersion(VERSION, BUILD_DATE)
+		mux := http.NewServeMux()
+		mux.Handle(conf.Prometheus.Path, promhttp.Handler())
 		go func() {
-			lg.NoticeF("Profiller is enabled, try start on port :%v", Config.Profiler.Port)
-			r := http.NewServeMux()
-			// Регистрация pprof-обработчиков
-			r.HandleFunc("/debug/pprof/", pprof.Index)
-			r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-			r.HandleFunc("/debug/pprof/profile", pprof.Profile)
-			r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-			r.HandleFunc("/debug/pprof/trace", pprof.Trace)
-			if err := http.ListenAndServe(fmt.Sprintf(":%v", Config.Profiler.Port), r); err != nil {
-				panic(err)
-			}
+			err := http.ListenAndServe(fmt.Sprintf(":%v", conf.Prometheus.Port), mux)
+			lg.FatalF("Prometheus exporter critical err: %v", err)
+		}()
+		lg.NoticeF("Prometheus exporter started on 0.0.0.0:%v%v", conf.Prometheus.Port, conf.Prometheus.Path)
+	}
+	if conf.Profiler.Enabled {
+		lg.NoticeF("Profiler is enabled, try start on port :%v", conf.Profiler.Port)
+		go func() {
+			// net/http/pprof registers its handlers on the default mux
+			err := http.ListenAndServe(fmt.Sprintf(":%v", conf.Profiler.Port), http.DefaultServeMux)
+			lg.FatalF("Profiler critical err: %v", err)
 		}()
 	}
-	//Initialize processor (api или script - выбор по Config.Processor)
+
 	var processor radius.Processor
-	switch strings.ToLower(Config.Processor) {
+	switch strings.ToLower(conf.Processor) {
 	case "", config.ProcessorAPI:
 		lg.NoticeF("processor: api")
-		processor = api.Init(Config.Api, lg)
+		processor = api.New(conf.Api, lg)
 	case config.ProcessorScript:
 		lg.NoticeF("processor: script")
-		p, err := script.NewProcessor(Config.Script, lg)
-		if err != nil {
+		if processor, err = script.NewProcessor(conf.Script, lg); err != nil {
 			lg.FatalF("failed to init script processor: %v", err)
 		}
-		processor = p
 	default:
-		lg.FatalF("unknown processor %q, expected %q or %q", Config.Processor, config.ProcessorAPI, config.ProcessorScript)
+		lg.FatalF("unknown processor %q, expected %q or %q", conf.Processor, config.ProcessorAPI, config.ProcessorScript)
 	}
 
-	//Initialize server
-	rad := radius.Init()
-	err := rad.SetProcessor(processor).
-		SetListenAddr(Config.Radius.ListenAddr).
-		SetLogger(lg).
-		SetSecret(Config.Radius.Secret).
-		SetReadBufferSize(Config.Radius.ReadBufferSize).
-		ListenAndServe()
-	if err != nil {
-		panic(tracerr.Sprint(err))
+	if err := radius.ListenAndServe(conf.Radius, processor, lg); err != nil {
+		lg.FatalF("radius server: %v", err)
 	}
 }

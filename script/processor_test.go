@@ -12,11 +12,7 @@ import (
 
 func testLogger(t *testing.T) *logger.Logger {
 	t.Helper()
-	lg, err := logger.New("test", 0, os.Stdout)
-	if err != nil {
-		t.Fatalf("logger.New: %v", err)
-	}
-	return lg
+	return logger.New(os.Stdout, logger.Options{Level: logger.InfoLevel})
 }
 
 func TestNewProcessorAuthOnly(t *testing.T) {
@@ -36,7 +32,7 @@ func TestNewProcessorAuthOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProcessor: %v", err)
 	}
-	if p.acctEngine != nil || p.postAuthEngine != nil {
+	if p.acct != nil || p.postAuth != nil {
 		t.Fatal("acct/post_auth не заданы в конфиге, но движки созданы")
 	}
 

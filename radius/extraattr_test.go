@@ -1,4 +1,4 @@
-package extraAttributes
+package radius
 
 import (
 	"testing"
@@ -6,10 +6,10 @@ import (
 	"layeh.com/radius"
 )
 
-func TestSetStringAddressList(t *testing.T) {
+func TestSetExtraAttributeAddressList(t *testing.T) {
 	p := radius.New(radius.CodeAccessAccept, []byte("secret"))
-	if err := SetString(p, "Mikrotik-Address-List", "Triolan.IPTV"); err != nil {
-		t.Fatalf("SetString: %v", err)
+	if err := setExtraAttribute(p, "Mikrotik-Address-List", "Triolan.IPTV"); err != nil {
+		t.Fatalf("setExtraAttribute: %v", err)
 	}
 
 	attrs := p.Attributes[26] // rfc2865.VendorSpecific_Type
@@ -32,13 +32,13 @@ func TestSetStringAddressList(t *testing.T) {
 	}
 }
 
-func TestSetStringDifferentVendors(t *testing.T) {
+func TestSetExtraAttributeDifferentVendors(t *testing.T) {
 	p := radius.New(radius.CodeAccessAccept, []byte("secret"))
-	if err := SetString(p, "Mikrotik-Address-List", "Triolan.IPTV"); err != nil {
-		t.Fatalf("SetString (mikrotik): %v", err)
+	if err := setExtraAttribute(p, "Mikrotik-Address-List", "Triolan.IPTV"); err != nil {
+		t.Fatalf("setExtraAttribute (mikrotik): %v", err)
 	}
-	if err := SetString(p, "Redback-Context-Name", "vlan101"); err != nil {
-		t.Fatalf("SetString (redback): %v", err)
+	if err := setExtraAttribute(p, "Redback-Context-Name", "vlan101"); err != nil {
+		t.Fatalf("setExtraAttribute (redback): %v", err)
 	}
 
 	attrs := p.Attributes[26] // rfc2865.VendorSpecific_Type
@@ -61,9 +61,9 @@ func TestSetStringDifferentVendors(t *testing.T) {
 	}
 }
 
-func TestSetStringUnknownAttribute(t *testing.T) {
+func TestSetExtraAttributeUnknownAttribute(t *testing.T) {
 	p := radius.New(radius.CodeAccessAccept, []byte("secret"))
-	if err := SetString(p, "Not-A-Real-Attribute", "x"); err == nil {
+	if err := setExtraAttribute(p, "Not-A-Real-Attribute", "x"); err == nil {
 		t.Fatal("expected error for unregistered attribute name")
 	}
 }

@@ -2,14 +2,12 @@ package config
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/meklis/dhcp-radius-server/api"
-	"github.com/meklis/dhcp-radius-server/logger"
+	"github.com/meklis/dhcp-radius-server/radius"
 	"github.com/meklis/dhcp-radius-server/script"
 	"gopkg.in/yaml.v2"
 )
@@ -29,25 +27,16 @@ type Configuration struct {
 		} `yaml:"console"`
 	} `yaml:"logger"`
 	Prometheus struct {
-		Enabled                 bool              `yaml:"enabled"`
-		Port                    int               `yaml:"port"`
-		Path                    string            `yaml:"path"`
-		RecalcEstabConnsTimeout time.Duration     `yaml:"recalc_estab_timeout"`
-		LiveRecalc              bool              `yaml:"live_recalc"`
-		Labels                  map[string]string `yaml:"static_labels"`
-		Detailed                bool              `yaml:"detailed"`
+		Enabled  bool   `yaml:"enabled"`
+		Port     int    `yaml:"port"`
+		Path     string `yaml:"path"`
+		Detailed bool   `yaml:"detailed"`
 	} `yaml:"prometheus"`
-	Radius struct {
-		ListenAddr string `yaml:"listen_addr"`
-		Secret     string `yaml:"secret"`
-		// ReadBufferSize - размер SO_RCVBUF в байтах. 0 - системный default
-		// (обычно net.core.rmem_default, на busy-системах маловат под всплески).
-		ReadBufferSize int `yaml:"read_buffer_size"`
-	} `yaml:"radius"`
+	Radius radius.Config `yaml:"radius"`
 
-	// processor: "api" (по умолчанию) или "script" - выбирает, какой из блоков ниже используется
+	// Processor selects the backend: "api" (default) or "script".
 	Processor string        `yaml:"processor"`
-	Api       api.ApiConfig `yaml:"api"`
+	Api       api.Config    `yaml:"api"`
 	Script    script.Config `yaml:"script"`
 
 	Profiler struct {
@@ -56,68 +45,33 @@ type Configuration struct {
 	} `yaml:"profiler"`
 }
 
-// envVarPattern матчит ${VAR} и ${VAR:-default} в конфиге.
+// envVarPattern matches ${VAR} and ${VAR:-default}.
 var envVarPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}`)
 
-// expandEnvVars подставляет переменные окружения в конфиг. ${VAR:-default} использует
-// default, если VAR не задан или пуст (как в shell). ${VAR} без default обязателен -
-// если такая переменная не задана, возвращается ошибка со списком всех отсутствующих,
-// чтобы не запускать сервер с "тихо" незаполненными обязательными полями (secret, url и т.п.)
-func expandEnvVars(s string) (string, error) {
+// Load reads the YAML config after substituting environment variables. Like in
+// shell, the default is used when VAR is unset or empty; ${VAR} without a
+// default is required, so the server never starts with a silently empty secret.
+func Load(path string) (Configuration, error) {
+	var conf Configuration
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return conf, err
+	}
 	var missing []string
-	result := envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
+	expanded := envVarPattern.ReplaceAllStringFunc(string(data), func(match string) string {
 		groups := envVarPattern.FindStringSubmatch(match)
-		name, hasDefault, def := groups[1], groups[2] != "", groups[3]
-		if val, ok := os.LookupEnv(name); ok && val != "" {
+		if val := os.Getenv(groups[1]); val != "" {
 			return val
 		}
-		if hasDefault {
-			return def
+		if groups[2] != "" {
+			return groups[3]
 		}
-		missing = append(missing, name)
+		missing = append(missing, groups[1])
 		return match
 	})
 	if len(missing) > 0 {
-		return "", fmt.Errorf("required environment variables not set: %v", strings.Join(missing, ", "))
+		return conf, fmt.Errorf("required environment variables not set: %v", strings.Join(missing, ", "))
 	}
-	return result, nil
-}
-
-func LoadConfig(path string, Config *Configuration) error {
-	bytes, err := ioutil.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	yamlConfig, err := expandEnvVars(string(bytes))
-	if err != nil {
-		return err
-	}
-	err = yaml.Unmarshal([]byte(yamlConfig), &Config)
-	fmt.Printf(`Loaded configuration from %v with env readed:
-%v
-`, path, yamlConfig)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func ConfigureLogger(conf *Configuration) *logger.Logger {
-	if conf.Logger.Console.Enabled {
-		color := 0
-		if conf.Logger.Console.EnableColor {
-			color = 1
-		}
-		lg, _ := logger.New("radius", color, os.Stdout)
-		lg.SetLogLevel(logger.LogLevel(conf.Logger.Console.LogLevel))
-		if !conf.Logger.Console.PrintFile {
-			lg.SetFormat("#%{id} %{time} > %{level} %{message}")
-		} else {
-			lg.SetFormat("#%{id} %{time} (%{filename}:%{line}) > %{level} %{message}")
-		}
-		return lg
-	} else {
-		lg, _ := logger.New("no_log", 0, os.DevNull)
-		return lg
-	}
+	err = yaml.Unmarshal([]byte(expanded), &conf)
+	return conf, err
 }

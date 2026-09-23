@@ -22,8 +22,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/meklis/dhcp-radius-server/macaddr"
 	"github.com/meklis/dhcp-radius-server/radius/redback"
-	"github.com/meklis/dhcp-radius-server/radius/redback_agent_parsers"
 	"layeh.com/radius"
 	"layeh.com/radius/rfc2865"
 	"layeh.com/radius/rfc2869"
@@ -245,7 +245,7 @@ func replay(pairs []pair, target, secret string, timeout time.Duration, workers 
 
 				out <- result{
 					userName:       rfc2865.UserName_GetString(pkt),
-					macSw:          redback_agent_parsers.ParseRemoteId(redback.AgentRemoteID_Get(reqPkt)),
+					macSw:          macaddr.FromRemoteID(redback.AgentRemoteID_Get(reqPkt)),
 					circuitID:      fmt.Sprintf("%X", redback.AgentCircuitID_Get(reqPkt)),
 					real:           realSum,
 					got:            gotSum,

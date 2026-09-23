@@ -26,7 +26,7 @@ func TestEngineNoLeak(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			_, err := e.CallAuthorize(&events.AuthRequest{
+			_, err := e.Authorize(&events.AuthRequest{
 				NasIp:     "10.0.0.1",
 				DeviceMac: "744D280EE846",
 				AgentOption: &events.AuthRequestOption{
@@ -35,7 +35,7 @@ func TestEngineNoLeak(t *testing.T) {
 				},
 			})
 			if err != nil {
-				t.Errorf("CallAuthorize: %v", err)
+				t.Errorf("Authorize: %v", err)
 			}
 		}()
 	}
@@ -68,9 +68,9 @@ func TestEngineNoLeakOnTimeout(t *testing.T) {
 	// свободного состояния и получит ошибку по таймауту. Пул всё равно должен
 	// остаться консистентным (ни одно состояние не потеряно)
 	lg := testLogger(t)
-	e, err := New("examples/acct.lua", 1, 1, lg, nil)
+	e, err := NewEngine("examples/acct.lua", 1, 1, lg, nil)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewEngine: %v", err)
 	}
 
 	var wg sync.WaitGroup
@@ -78,7 +78,7 @@ func TestEngineNoLeakOnTimeout(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = e.CallAccounting(&events.AcctRequest{DeviceMac: "AA:BB:CC:DD:EE:FF"})
+			_ = e.Accounting(&events.AcctRequest{DeviceMac: "AA:BB:CC:DD:EE:FF"})
 		}()
 	}
 	wg.Wait()

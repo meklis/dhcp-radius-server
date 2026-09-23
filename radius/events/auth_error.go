@@ -2,25 +2,16 @@ package events
 
 import "errors"
 
-// AuthErrorKind классифицирует, почему authorize() не смог выдать ответ - по
-// аналогии с кодами возврата модуля FreeRADIUS, которые использует legacy
-// Perl-скрипт этого проекта (script.pl в корне репозитория, authenticate()):
-// RLM_MODULE_FAIL / RLM_MODULE_INVALID / RLM_MODULE_REJECT. Подтверждено
-// прогоном реального прод-трафика через tools/pcapreplay - RLM_MODULE_INVALID
-// там реально приходит явным Access-Reject, а не молчанием.
+// AuthErrorKind tells the radius handler how to answer when authorize() fails.
+// It mirrors the FreeRADIUS module codes used by the legacy Perl script:
 //
-//   - KindError   - инфраструктурная проблема, не связанная с конкретным
-//     запросом (clientdb недоступна, Lua-скрипт упал/завис, пул воркеров
-//     исчерпан). Аналог RLM_MODULE_FAIL. Ответ клиенту НЕ отправляется -
-//     RADIUS-таймаут на NAS, чтобы тот переспросил, когда проблема пройдёт.
-//     Явный Access-Reject был бы неверен - мы не знаем, отказать реально
-//     этому устройству или нет, инфраструктура просто сейчас не работает.
-//   - KindInvalid - скрипт определил, что этот конкретный запрос не может
-//     быть обслужен (например не распарсился circuit_id). Аналог
-//     RLM_MODULE_INVALID. Отправляется явный Access-Reject.
-//   - KindReject  - явное бизнес-решение отказать этому устройству (в Perl
-//     константа RLM_MODULE_REJECT определена, но нигде не используется -
-//     задел на будущее). Отправляется явный Access-Reject.
+//   - KindError (RLM_MODULE_FAIL): infrastructure failure unrelated to the
+//     request (clientdb down, script crashed, no free worker). No answer is
+//     sent, so the NAS retries later.
+//   - KindInvalid (RLM_MODULE_INVALID): this request cannot be served, e.g.
+//     circuit_id did not parse. Answered with Access-Reject.
+//   - KindReject (RLM_MODULE_REJECT): explicit business decision to deny the
+//     device. Answered with Access-Reject.
 type AuthErrorKind string
 
 const (
@@ -29,10 +20,7 @@ const (
 	KindReject  AuthErrorKind = "REJECT"
 )
 
-// AuthError оборачивает ошибку authorize() её AuthErrorKind, чтобы вызывающий
-// код (см. radius/handler.go) мог решить, отвечать явным Access-Reject
-// (INVALID/REJECT) или промолчать (ERROR). Ошибка без такой обёртки (обычный
-// error откуда угодно из стека вызовов) по умолчанию считается KindError.
+// AuthError carries the kind of an authorize() failure. Any other error is KindError.
 type AuthError struct {
 	Kind            AuthErrorKind
 	Err             error
@@ -42,27 +30,10 @@ type AuthError struct {
 func (e *AuthError) Error() string { return e.Err.Error() }
 func (e *AuthError) Unwrap() error { return e.Err }
 
-func NewInvalidError(err error) error { return &AuthError{Kind: KindInvalid, Err: err} }
-func NewRejectError(err error) error  { return &AuthError{Kind: KindReject, Err: err} }
-
-func NewInvalidErrorWithAttrs(err error, attrs map[string]string) error {
-	return &AuthError{Kind: KindInvalid, Err: err, ExtraAttributes: attrs}
-}
-func NewRejectErrorWithAttrs(err error, attrs map[string]string) error {
-	return &AuthError{Kind: KindReject, Err: err, ExtraAttributes: attrs}
-}
 func ClassifyAuthError(err error) AuthErrorKind {
 	var ae *AuthError
 	if errors.As(err, &ae) {
 		return ae.Kind
 	}
 	return KindError
-}
-
-func ExtractExtraAttributes(err error) map[string]string {
-	var ae *AuthError
-	if errors.As(err, &ae) {
-		return ae.ExtraAttributes
-	}
-	return nil
 }
