@@ -3,3 +3,4 @@ vendor
 radius-*
 /pcapreplay
 *.pcap
+/radbench
