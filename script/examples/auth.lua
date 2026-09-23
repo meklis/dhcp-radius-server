@@ -195,9 +195,6 @@ local function attach(rm, t)
     return t
 end
 
--- reject отдаёт причину отказа и в Reply-Message Access-Reject, чтобы её было
--- видно на стороне NAS. Атрибут RADIUS ограничен 253 байтами - длиннее не
--- закодируется, и Reject уйдёт вовсе без Reply-Message
 local function reject(msg)
     return attach(msg:sub(1, 253), { reject = msg })
 end
