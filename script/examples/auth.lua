@@ -30,7 +30,8 @@
 --   reject               - как error, приоритетнее него, если заданы оба. Явное
 --                          бизнес-решение отказать этому устройству (например
 --                          заблокировано) - клиенту отправляется явный Access-Reject.
---                          Сейчас нигде не используется - задел под будущие правила
+--                          Текст сам в ответ не попадает - см. reject() ниже, который
+--                          дублирует его в Reply-Message
 --
 -- ГЛОБАЛЬНЫЕ ОБЪЕКТЫ:
 --   db:getDeviceByMac(mac) -> table{ip, mac, parse_type} | nil
@@ -194,6 +195,13 @@ local function attach(rm, t)
     return t
 end
 
+-- reject отдаёт причину отказа и в Reply-Message Access-Reject, чтобы её было
+-- видно на стороне NAS. Атрибут RADIUS ограничен 253 байтами - длиннее не
+-- закодируется, и Reject уйдёт вовсе без Reply-Message
+local function reject(msg)
+    return attach(msg:sub(1, 253), { reject = msg })
+end
+
 function authorize(request)
     local macAbon = request.device_mac
     local macSw = request.option.remote_id or ""
@@ -204,7 +212,7 @@ function authorize(request)
         local device = db:getDeviceByMac(macSw)
         if not device then
             log.warning("authorize: mac=" .. macAbon .. " mac_sw=" .. macSw .. " reject: device not found")
-            return { reject = "device not found: mac_sw=" .. macSw }
+            return reject("device not found: mac_sw=" .. macSw)
         end
         parseType = device.parse_type
     elseif hexToStr(circuitId):match("^s=%d") then
@@ -218,7 +226,7 @@ function authorize(request)
         parseType = "zte"
     else
         log.warning("authorize: mac=" .. macAbon .. " mac_sw=<UNKNOWN> reject: no remote_id")
-        return { reject = "no remote_id: circuit_id=" .. circuitId }
+        return reject("no remote_id: circuit_id=" .. circuitId)
     end
 
     local vlan, stack, port = circuitReader(circuitId, parseType)

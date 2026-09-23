@@ -1,6 +1,7 @@
 package script
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -503,5 +504,32 @@ func TestConcurrentAuthorizeWithDB(t *testing.T) {
 		if err := <-done; err != nil {
 			t.Errorf("concurrent Authorize: %v", err)
 		}
+	}
+}
+
+// Причина отказа должна уходить и в Reply-Message Access-Reject (см. reject() в auth.lua)
+func TestEngineWithDBRejectCarriesReplyMessage(t *testing.T) {
+	e := testEngineWithDB(t)
+	cases := []struct {
+		name   string
+		option *events.AuthRequestOption
+		want   string
+	}{
+		{"device not found", &events.AuthRequestOption{RemoteId: "00:11:22:33:44:55", RawCircuitId: "00040001"},
+			"device not found: mac_sw=00:11:22:33:44:55"},
+		{"no remote_id", &events.AuthRequestOption{RawCircuitId: "00040001"},
+			"no remote_id: circuit_id=00040001"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := e.Authorize(&events.AuthRequest{NasIp: "10.0.0.1", DeviceMac: "744D280EE846", AgentOption: c.option})
+			var authErr *events.AuthError
+			if !errors.As(err, &authErr) || authErr.Kind != events.KindReject {
+				t.Fatalf("expected reject, got %v", err)
+			}
+			if got := authErr.ExtraAttributes["Reply-Message"]; got != c.want {
+				t.Errorf("Reply-Message = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
