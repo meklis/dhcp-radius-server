@@ -42,6 +42,7 @@ func testDBServer(t *testing.T) *httptest.Server {
 			w.Write([]byte("33686018;085A119465E0;dlink\n"))
 			w.Write([]byte("33686018;AABBCCDDEEAA;cdata\n"))
 			w.Write([]byte("33686018;AABBCCDDEE11;bdcom\n"))
+			w.Write([]byte("33686018;D80AE6B34D8F;zte\n"))
 		case "clients":
 			w.Write([]byte(clientsBindsData))
 			w.Write([]byte("5;16909063;112233445577;AABBCCDDEEAA;2005\n"))
@@ -404,9 +405,8 @@ func TestEngineWithDBWifiMacFallback(t *testing.T) {
 func TestEngineWithDBNoRemoteIdRejects(t *testing.T) {
 	e := testEngineWithDB(t)
 
-	// без remote_id мака свитча нет, а circuit_id не в самоописываемом ZTE-формате
-	// (см. TestEngineWithDBNoRemoteIdZteStillParses) - тип парсера определить
-	// неоткуда, обслужить запрос нечем, явный reject
+	// без remote_id мака свитча нет - ни тип парсера, ни привязку по свитч-порту
+	// определить неоткуда, обслужить запрос нечем, явный reject
 	_, err := e.Authorize(&events.AuthRequest{
 		NasIp:     "10.0.0.1",
 		DeviceMac: "999999999999",
@@ -419,29 +419,6 @@ func TestEngineWithDBNoRemoteIdRejects(t *testing.T) {
 	}
 	if kind := events.ClassifyAuthError(err); kind != events.KindReject {
 		t.Errorf("expected KindReject, got %v", kind)
-	}
-}
-
-func TestEngineWithDBNoRemoteIdZteStillParses(t *testing.T) {
-	e := testEngineWithDB(t)
-
-	// ZTE OLT (l2-relay-agent) иногда не шлёт remote-id вовсе, но circuit_id в этом
-	// случае самоописываемый текстовый формат (s=3 p=1 o=13 v=2146 m=e848.b842.2f7d) -
-	// тип парсера однозначен без похода в db. Подтверждено сверкой через
-	// tools/pcapreplay на реальном трафике (kharkov.pcap): без этой ветки
-	// реджектились 30/31 сессий, которые прод реально принимает
-	resp, err := e.Authorize(&events.AuthRequest{
-		NasIp:     "10.0.0.1",
-		DeviceMac: "E8:48:B8:42:2F:7D",
-		AgentOption: &events.AuthRequestOption{
-			RawCircuitId: "733D3320703D31206F3D313320763D32313436206D3D653834382E623834322E32663764",
-		},
-	})
-	if err != nil {
-		t.Fatalf("Authorize: %v", err)
-	}
-	if resp.PoolName != "INET-2146-FAKE" || resp.LeaseTimeSec != 120 {
-		t.Errorf("expected pool_name=INET-2146-FAKE lease=120, got %+v", resp)
 	}
 }
 
@@ -519,6 +496,10 @@ func TestEngineWithDBRejectCarriesReplyMessage(t *testing.T) {
 			"device not found: mac_sw=00:11:22:33:44:55"},
 		{"no remote_id", &events.AuthRequestOption{RawCircuitId: "00040001"},
 			"no remote_id: circuit_id=00040001"},
+		// ZTE OLT: запрос с физического порта xgei-1/4/1, а не с ONU - бинарный
+		// option82 от dhcp relay вместо текстового s=..;v=.. от port-identification
+		{"zte eth port", &events.AuthRequestOption{RemoteId: "D8:0A:E6:B3:4D:8F", RawCircuitId: "04B9001222"},
+			"request from eth port, only ONU allowed: mac_sw=D8:0A:E6:B3:4D:8F circuit_id=04B9001222"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

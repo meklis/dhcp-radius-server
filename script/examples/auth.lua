@@ -83,10 +83,18 @@ local function hexToStr(hex)
     return table.concat(chars)
 end
 
+-- парсер возвращает vlan, stack, port. nil без причины - circuit_id не распарсился
+-- (error), nil + 4-й параметр-причина - запрос заведомо не обслуживается (reject)
 local circuitParsers = {}
 
 circuitParsers["zte"] = function(circuit)
     local raw = hexToStr((circuit:gsub("^0[xX]", "")))
+    -- текстовый circuit_id (s=..;p=..;o=..;v=..) OLT ставит только на ONU через
+    -- port-identification, с физического eth-порта (gei/xgei) приходит бинарный
+    -- option82 от dhcp relay
+    if not raw:find("v=%d") then
+        return nil, nil, nil, "request from eth port, only ONU allowed"
+    end
     local vlan = tonumber(raw:match("v=(%d+)"))
     if not vlan then
         return nil
@@ -144,9 +152,9 @@ local function circuitReader(circuit, parseType)
     if not parser then
         return nil
     end
-    local vlan, stack, port = parser(circuit)
+    local vlan, stack, port, rejectReason = parser(circuit)
     if not vlan then
-        return nil
+        return nil, nil, nil, rejectReason
     end
     return vlan, stack, port
 end
@@ -212,21 +220,16 @@ function authorize(request)
             return reject("device not found: mac_sw=" .. macSw)
         end
         parseType = device.parse_type
-    elseif hexToStr(circuitId):match("^s=%d") then
-        -- ZTE OLT (l2-relay-agent) иногда не шлёт remote-id вовсе, но circuit_id
-        -- в этом случае самоописываемый текстовый формат (s=..;p=..;o=..;v=..) -
-        -- тип парсера тут однозначен и без похода в db, в отличие от остальных
-        -- вендоров (там определение по длине убрано - см. parseTypeByUnknownDevice
-        -- в истории этого файла, не подтвердилось трафиком). Подтверждено сверкой
-        -- через tools/pcapreplay: без этой ветки реджектились 30/31
-        -- сессий, которые прод реально принимает
-        parseType = "zte"
     else
         log.warning("authorize: mac=" .. macAbon .. " mac_sw=<UNKNOWN> reject: no remote_id")
         return reject("no remote_id: circuit_id=" .. circuitId)
     end
 
-    local vlan, stack, port = circuitReader(circuitId, parseType)
+    local vlan, stack, port, rejectReason = circuitReader(circuitId, parseType)
+    if rejectReason then
+        log.warning("authorize: mac=" .. macAbon .. " mac_sw=" .. macSw .. " parse_type=" .. tostring(parseType) .. " reject: " .. rejectReason)
+        return reject(rejectReason .. ": mac_sw=" .. macSw .. " circuit_id=" .. circuitId)
+    end
 
     log.debug("authorize: mac=" .. macAbon .. " mac_sw=" .. macSw ..
         " parse_type=" .. tostring(parseType) .. " vlan=" .. tostring(vlan) .. " port=" .. tostring(port))
