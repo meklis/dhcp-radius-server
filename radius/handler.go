@@ -76,8 +76,9 @@ func (s *Server) serve(w radius.ResponseWriter, r *radius.Request) {
 	if circuitID := redback.AgentCircuitID_Get(r.Packet); len(circuitID) > 0 {
 		req.AgentOption.RawCircuitId = fmt.Sprintf("%X", circuitID)
 	}
-	s.lg.DebugF("%v %x: nasName=%v, nasIpAddr=%v, deviceMac=%v, dhcpServerName=%v, dhcpServerId=%v, agentRemoteId=%v",
-		r.Code, r.Authenticator, nasName, nasIP, deviceMac, serverName, serverID, req.AgentOption.RemoteId)
+	s.lg.DebugF("%v %x: nasName=%v, nasIpAddr=%v, deviceMac=%v, dhcpServerName=%v, dhcpServerId=%v, agentRemoteId=%v, agentCircuitId=%v, attrs=%v",
+		r.Code, r.Authenticator, nasName, nasIP, deviceMac, serverName, serverID, req.AgentOption.RemoteId,
+		req.AgentOption.RawCircuitId, packetDump{r.Packet})
 
 	resp, err := s.processor.Get(&req)
 	switch {
