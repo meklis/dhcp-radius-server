@@ -68,7 +68,7 @@ func TestEngineNoLeakOnTimeout(t *testing.T) {
 	// свободного состояния и получит ошибку по таймауту. Пул всё равно должен
 	// остаться консистентным (ни одно состояние не потеряно)
 	lg := testLogger(t)
-	e, err := NewEngine("examples/acct.lua", 1, 1, lg, nil)
+	e, err := NewEngine("examples/acct.lua", 1, 1, lg, nil, nil)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}

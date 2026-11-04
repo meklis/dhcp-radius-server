@@ -341,6 +341,97 @@ device_mac, port)` без мак-адреси клієнта). Повторюв�
   масив (порожній, якщо нічого не знайдено) - під одним мак-адресом клієнта може бути
   декілька прив'язок.
 
+### Redis (`redis`)
+
+Сервери з кореневої секції `redis` конфігу доступні в скриптах як `redis.<ключ>` (для ключа з
+дефісом - `redis["my-server"]`). Якщо секція порожня, глобальної змінної `redis` немає. Секція
+не пов'язана з `script.database.redis` - той канал налаштовується окремо.
+
+```yaml
+redis:
+  main:
+    addr: ${REDIS_ADDR:-10.231.1.31:63379}
+    password: ${REDIS_PASSWORD:-}
+    db: 0
+```
+
+* `redis.main:set(key, value, [ttl_sec]) -> true` - без `ttl_sec` значення не має терміну дії
+* `redis.main:get(key) -> value | nil` - `nil` без помилки означає, що ключа немає
+* `redis.main:incr(key, [by]) -> нове значення` - `by` за замовчуванням 1
+* `redis.main:del(key) -> кількість видалених ключів`
+* `redis.main:publish(channel, message) -> кількість отримувачів`
+
+`value` у `set` і `message` у `publish` можуть бути будь-якого типу: рядок передається як є, число
+і boolean - текстом, таблиця кодується в JSON за правилами `json.encode` (див. нижче). `get` завжди
+повертає рядок, збережену таблицю потрібно розібрати через `json.decode`.
+
+При помилці кожен метод повертає `nil, err` і не перериває скрипт, тому рішення приймає сам
+скрипт. Виклики обмежені `script.timeout`:
+
+```lua
+local ok, err = redis.main:set("lease:" .. request.device_mac, response.ip_address, 3600)
+if not ok then
+    log.error("redis: " .. err)
+end
+```
+
+Скрипти `post_auth.lua` і `acct.lua` публікують кожну подію в `redis.main` як JSON:
+
+* канал `radius-post-auth-events` - `{time, request, response}`, викликається на кожен Access-Request:
+  `response.status` = `ACCEPT`, `REJECT`, `INVALID` або `ERROR`, текст помилки - у `response.error`,
+  Reply-Message - у `response.extra_attributes["Reply-Message"]` (зокрема при відмові)
+* канал `radius-acct-events` - `{time, request}`, викликається на кожен Accounting-Request
+
+`time` - unix-час публікації. Pub/sub не зберігає повідомлення: події без активного підписника
+втрачаються.
+
+### JSON (`json`)
+
+* `json.encode(value) -> string` - таблиця з ключами `1..n` стає масивом, будь-яка інша (зокрема
+  порожня) - об'єктом, ключі об'єкта відсортовані
+* `json.decode(string) -> value` - `null` стає `nil`, тому в масиві з `null` залишається дірка,
+  а ключ об'єкта зі значенням `null` зникає
+
+При помилці обидві функції повертають `nil, err` і не переривають скрипт. Функції, цикли в
+таблицях (вкладеність понад 64 рівні), `NaN` та `inf` закодувати не можна.
+
+```lua
+local body = json.encode({session_id = request.session_id, status = request.status_type})
+
+local event, err = json.decode('{"id": 123}')
+if not event then
+    log.error("json: " .. err)
+end
+```
+
+### HTTP (`http`)
+
+* `http:get(url, [options]) -> response`
+* `http:delete(url, [options]) -> response`
+* `http:post(url, [body], [options]) -> response`
+* `http:put(url, [body], [options]) -> response`
+* `http:patch(url, [body], [options]) -> response`
+
+`options` - таблиця `{headers = {["X-Token"] = "..."}}`, `body` - рядок. `response` - таблиця
+`{status, body, headers}`, імена в `headers` канонічні (`Content-Type`), кілька значень одного
+заголовка з'єднані через `, `.
+
+Статус 4xx/5xx - це звичайна відповідь, його перевіряє скрипт (`resp.status`). `nil, err`
+повертається, тільки якщо відповіді немає (недоступний сервер, таймаут) або тіло більше 10 МБ.
+Редиректи виконуються автоматично. Окремого таймауту немає: запит обмежений `script.timeout`, і
+після його спливання весь скрипт завершується з помилкою.
+
+```lua
+local resp, err = http:post("https://example.com/lease", json.encode({ip = response.ip_address}), {
+    headers = {["Content-Type"] = "application/json"},
+})
+if not resp then
+    log.error("http: " .. err)
+elseif resp.status ~= 200 then
+    log.error("http: status " .. resp.status)
+end
+```
+
 ### Як запустити       
 1. Docker - зібрати образ самостійно з вихідного коду (опис в ./install/docker),
    або запустити готовий образ з ghcr.io через docker-compose без клонування

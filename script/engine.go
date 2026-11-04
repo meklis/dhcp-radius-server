@@ -13,6 +13,7 @@ import (
 	"github.com/meklis/dhcp-radius-server/clientdb"
 	"github.com/meklis/dhcp-radius-server/logger"
 	"github.com/meklis/dhcp-radius-server/radius/events"
+	"github.com/meklis/dhcp-radius-server/redisconn"
 	lua "github.com/yuin/gopher-lua"
 	"github.com/yuin/gopher-lua/parse"
 )
@@ -31,8 +32,9 @@ type Engine struct {
 }
 
 // NewEngine compiles the script once and prepares poolSize Lua states.
-// A nil store leaves the global db undefined in the script.
-func NewEngine(path string, poolSize int, timeout time.Duration, lg *logger.Logger, store *clientdb.Store) (*Engine, error) {
+// A nil store leaves the global db undefined in the script, no redis servers
+// leave the global redis undefined.
+func NewEngine(path string, poolSize int, timeout time.Duration, lg *logger.Logger, store *clientdb.Store, redisClients redisconn.Clients) (*Engine, error) {
 	if poolSize <= 0 {
 		poolSize = 5
 	}
@@ -96,8 +98,13 @@ func NewEngine(path string, poolSize int, timeout time.Duration, lg *logger.Logg
 	for i := 0; i < poolSize; i++ {
 		ls := lua.NewState()
 		ls.SetGlobal("log", ls.SetFuncs(ls.NewTable(), logFuncs))
+		ls.SetGlobal("json", ls.SetFuncs(ls.NewTable(), jsonFuncs))
+		ls.SetGlobal("http", ls.SetFuncs(ls.NewTable(), httpFuncs))
 		if store != nil {
 			ls.SetGlobal("db", ls.SetFuncs(ls.NewTable(), dbFuncs))
+		}
+		if len(redisClients) > 0 {
+			ls.SetGlobal("redis", redisTable(ls, redisClients))
 		}
 		ls.Push(ls.NewFunctionFromProto(proto))
 		if err := ls.PCall(0, lua.MultRet, nil); err != nil {
@@ -262,6 +269,22 @@ func tableToAuthResponse(ret lua.LValue) (*events.AuthResponse, error) {
 		return nil, &events.AuthError{Kind: events.KindInvalid, Err: errors.New("authorize() returned empty ip_address and pool_name"), ExtraAttributes: resp.ExtraAttributes}
 	}
 	return resp, nil
+}
+
+// luaContext bounds a call by the script timeout. There is no context while
+// the script's top-level chunk runs at startup.
+func luaContext(l *lua.LState) context.Context {
+	if ctx := l.Context(); ctx != nil {
+		return ctx
+	}
+	return context.Background()
+}
+
+// pushLuaError returns nil, err to the script.
+func pushLuaError(l *lua.LState, err error) int {
+	l.Push(lua.LNil)
+	l.Push(lua.LString(err.Error()))
+	return 2
 }
 
 func optString(l *lua.LState, idx int) string {

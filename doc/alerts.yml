@@ -111,6 +111,14 @@ groups:
           summary: "Черга post_auth/acct до API не встигає розбиратись"
           description: "rad_api_post_auth_queue_len/rad_api_acct_queue_len стабільно високі - API не встигає приймати події, можлива втрата даних при подальшому рості (processor: api)."
 
+      - alert: ScriptEventsDropped
+        expr: sum by (phase) (increase(rad_script_dropped_events_count[5m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "script: втрачаються події {{ $labels.phase }}"
+          description: "rad_script_dropped_events_count росте - черга script.queue_size заповнена, воркери не встигають (повільний або недоступний Redis, сплеск трафіку). Подія, що не вмістилась, втрачається без повтору, відповідь NAS це не зачіпає."
+
       # --- Процес/рантайм ---
 
       - alert: RadiusGoroutinesHigh

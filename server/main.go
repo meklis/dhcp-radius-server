@@ -14,6 +14,7 @@ import (
 	"github.com/meklis/dhcp-radius-server/logger"
 	"github.com/meklis/dhcp-radius-server/prom"
 	"github.com/meklis/dhcp-radius-server/radius"
+	"github.com/meklis/dhcp-radius-server/redisconn"
 	"github.com/meklis/dhcp-radius-server/script"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -73,7 +74,11 @@ func main() {
 		processor = api.New(conf.Api, lg)
 	case config.ProcessorScript:
 		lg.NoticeF("processor: script")
-		if processor, err = script.NewProcessor(conf.Script, lg); err != nil {
+		redisClients, err := redisconn.New(conf.Redis)
+		if err != nil {
+			lg.FatalF("failed to init redis: %v", err)
+		}
+		if processor, err = script.NewProcessor(conf.Script, redisClients, lg); err != nil {
 			lg.FatalF("failed to init script processor: %v", err)
 		}
 	default:

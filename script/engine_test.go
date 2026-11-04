@@ -9,7 +9,7 @@ import (
 
 func testEngine(t *testing.T, path string) *Engine {
 	t.Helper()
-	e, err := NewEngine(path, 2, time.Second, testLogger(t), nil)
+	e, err := NewEngine(path, 2, time.Second, testLogger(t), nil, unreachableRedis())
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}

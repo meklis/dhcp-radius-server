@@ -86,23 +86,26 @@ func (s *Server) serve(w radius.ResponseWriter, r *radius.Request) {
 		// KindError is an infrastructure failure: stay silent so the NAS retries.
 		// Invalid/reject are decisions about this device and get Access-Reject.
 		kind := events.ClassifyAuthError(err)
+		var extraAttributes map[string]string
+		var authErr *events.AuthError
+		if errors.As(err, &authErr) {
+			extraAttributes = authErr.ExtraAttributes
+		}
 		if kind == events.KindError {
 			prom.IncError(nasIP, prom.Critical, "processor_error")
 			s.lg.CriticalF("error get answer from processor: client_mac=%v %v", deviceMac, err)
 		} else {
 			prom.IncError(nasIP, prom.Warning, "auth_rejected")
 			s.lg.WarningF("request rejected: client_mac=%v %v", deviceMac, err)
-			var authErr *events.AuthError
-			errors.As(err, &authErr)
-			s.respond(w, r, &events.AuthResponse{Class: req.Class, ExtraAttributes: authErr.ExtraAttributes}, false)
+			s.respond(w, r, &events.AuthResponse{Class: req.Class, ExtraAttributes: extraAttributes}, false)
 		}
-		resp = &events.AuthResponse{Status: string(kind), Error: err.Error()}
+		resp = &events.AuthResponse{Status: string(kind), Error: err.Error(), ExtraAttributes: extraAttributes}
 
 	case resp.IpAddress == "" && resp.PoolName == "":
 		prom.IncError(nasIP, prom.Warning, "empty_response")
 		s.lg.WarningF("processor returned empty ip_address and pool_name: client_mac=%v", deviceMac)
 		s.respond(w, r, &events.AuthResponse{Class: req.Class, ExtraAttributes: resp.ExtraAttributes}, false)
-		resp = &events.AuthResponse{Status: string(events.KindInvalid), Error: "pool_name and ip_address is empty"}
+		resp = &events.AuthResponse{Status: string(events.KindInvalid), Error: "pool_name and ip_address is empty", ExtraAttributes: resp.ExtraAttributes}
 
 	default:
 		prom.IncRequest(nasIP)
@@ -116,7 +119,7 @@ func (s *Server) serve(w radius.ResponseWriter, r *radius.Request) {
 		}
 		resp.Class = req.Class
 		if !s.respond(w, r, resp, true) {
-			resp = &events.AuthResponse{Status: string(events.KindError), Error: "failed to write response"}
+			resp = &events.AuthResponse{Status: string(events.KindError), Error: "failed to write response", ExtraAttributes: resp.ExtraAttributes}
 		}
 	}
 	resp.Class = req.Class

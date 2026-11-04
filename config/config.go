@@ -8,6 +8,7 @@ import (
 
 	"github.com/meklis/dhcp-radius-server/api"
 	"github.com/meklis/dhcp-radius-server/radius"
+	"github.com/meklis/dhcp-radius-server/redisconn"
 	"github.com/meklis/dhcp-radius-server/script"
 	"gopkg.in/yaml.v2"
 )
@@ -33,6 +34,9 @@ type Configuration struct {
 		Detailed bool   `yaml:"detailed"`
 	} `yaml:"prometheus"`
 	Radius radius.Config `yaml:"radius"`
+
+	// Redis lists the named servers available to scripts as redis.<key>.
+	Redis redisconn.Config `yaml:"redis"`
 
 	// Processor selects the backend: "api" (default) or "script".
 	Processor string        `yaml:"processor"`

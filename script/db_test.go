@@ -66,7 +66,7 @@ func testEngineWithDB(t *testing.T) *Engine {
 	}
 	t.Cleanup(store.Close)
 
-	e, err := NewEngine("examples/auth.lua", 2, time.Second, testLogger(t), store)
+	e, err := NewEngine("examples/auth.lua", 2, time.Second, testLogger(t), store, nil)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}

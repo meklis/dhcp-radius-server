@@ -94,6 +94,10 @@ var (
 		Name: "rad_clientdb_last_reload_timestamp_seconds",
 		Help: "Unix timestamp of the last successful clientdb reload",
 	})
+	scriptDroppedEvents = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "rad_script_dropped_events_count",
+		Help: "Count of acct and post_auth events dropped because the script queue was full, by phase",
+	}, []string{"phase"})
 	clientDBRedisConnected = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "rad_clientdb_redis_connected",
 		Help: "Connection status of the clientdb redis live-update subscription (1=connected, 0=disconnected)",
@@ -191,6 +195,12 @@ func SetClientDBDevices(count int) {
 func SetClientDBBinds(source string, count int) {
 	if Enabled {
 		clientDBBinds.WithLabelValues(source).Set(float64(count))
+	}
+}
+
+func IncScriptDroppedEvent(phase string) {
+	if Enabled {
+		scriptDroppedEvents.WithLabelValues(phase).Inc()
 	}
 }
 

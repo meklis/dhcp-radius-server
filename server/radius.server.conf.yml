@@ -27,6 +27,15 @@ profiler:
   port: 2155
   enabled: false
 
+#Redis-серверы для Lua-скриптов, доступны в них как redis.<ключ> (см. README). Ключ -
+#произвольное имя сервера, серверов может быть несколько. Подключение устанавливается при
+#первом вызове. Не связано с script.database.redis - там подключение настраивается отдельно
+redis:
+  main:
+    addr: ${REDIS_ADDR:-10.231.1.31:63379}
+    password: ${REDIS_PASSWORD:-}
+    db: 0
+
 #Конфигурация радиус-сервера
 radius:
   listen_addr: ${RADIUS_LISTEN_ADDR:-0.0.0.0:1812}
@@ -52,6 +61,9 @@ script:
   #Проверено нагрузочным тестированием - дальнейшее увеличение (до 500) не даёт
   #прироста производительности, см. doc/LOAD_TESTING.md
   pool_size: ${SCRIPT_POOL_SIZE:-300}
+  #Размер очереди событий acct и post_auth (у каждого своя) перед воркерами. Событие, которое
+  #не поместилось, теряется - см. метрику rad_script_dropped_events_count
+  queue_size: ${SCRIPT_QUEUE_SIZE:-1000}
   timeout: ${SCRIPT_TIMEOUT:-3s}
   auth: ${SCRIPT_AUTH_PATH:-script/examples/auth.lua}
   acct: ${SCRIPT_ACCT_PATH:-script/examples/acct.lua}

@@ -54,6 +54,7 @@
 | `rad_api_alive_status` | gauge | `api_addr` | `1` - адреса жива, `0` - виключена з ротації (`api.*.alive_checking`) |
 | `rad_api_post_auth_queue_len` | gauge | - | Довжина черги відправки post-auth подій в API |
 | `rad_api_acct_queue_len` | gauge | - | Довжина черги відправки acct-подій в API |
+| `rad_script_dropped_events_count` | counter | `phase` | Кількість подій `acct`/`post_auth`, відкинутих через заповнену чергу `script.queue_size` (processor: script) |
 | `rad_cache_responses_count` | gauge | - | Кількість відповідей, що зараз лежать у кеші (`api.auth.caching`) |
 
 ### Службові
